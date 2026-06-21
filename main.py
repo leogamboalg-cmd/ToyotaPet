@@ -1,7 +1,9 @@
 import math
+import os
 import sys
 import threading
-
+from datetime import datetime
+import subprocess
 import pygame
 
 from car_telemetry import CarTelemetry
@@ -11,9 +13,12 @@ from car_telemetry import CarTelemetry
 # BASIC SETUP
 # =========================
 
-WIDTH, HEIGHT = 1040, 640
-MIN_WIDTH, MIN_HEIGHT = 640, 480
+WIDTH, HEIGHT = 1280, 720
+MIN_WIDTH, MIN_HEIGHT = 800, 480
 FPS = 60
+carplay_process = None
+
+CARPLAY_PATH = "/home/leog0495/Desktop/Carplay.AppImage"
 
 pygame.init()
 screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
@@ -22,26 +27,67 @@ clock = pygame.time.Clock()
 
 
 # =========================
-# COLORS
+# ASSET PATHS
 # =========================
 
-BG_TOP = (8, 12, 23)
-BG_BOTTOM = (13, 18, 32)
-SURFACE = (20, 27, 43)
-SURFACE_2 = (25, 34, 54)
-SURFACE_HOVER = (31, 44, 70)
-STROKE_SOFT = (37, 49, 70)
-SHADOW = (3, 5, 10)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ICON_DIR = os.path.join(BASE_DIR, "assets", "icons")
 
-TEXT = (239, 243, 250)
-MUTED = (154, 164, 181)
-FAINT = (104, 116, 136)
+ASSET_PATHS = {
+    "background": os.path.join(ICON_DIR, "homepageBackgroundOverLay.png"),
+    "bmo": os.path.join(ICON_DIR, "bmo.png"),
+    "carplay": os.path.join(ICON_DIR, "carplay.png"),
+    "trips": os.path.join(ICON_DIR, "trips.png"),
+    "telemetry": os.path.join(ICON_DIR, "telemetry.png"),
+    "settings": os.path.join(ICON_DIR, "settings.png"),
+    "apps": os.path.join(ICON_DIR, "apps.png"),
+    "wifi": os.path.join(ICON_DIR, "wifi.png"),
+}
 
-BLUE = (88, 166, 255)
-CYAN = (64, 211, 231)
-GREEN = (85, 214, 149)
-YELLOW = (244, 191, 79)
-RED = (244, 105, 105)
+# =========================
+# SCREEN NAVIGATION
+# =========================
+
+current_screen = "home"
+
+click_targets = {
+    "carplay": None,
+    "trips": None,
+    "telemetry": None,
+    "settings": None,
+    "apps": None,
+    "media": None,
+}
+
+# =========================
+# COLORS - CARTOON ROADTRIP THEME
+# =========================
+
+TEXT = (12, 24, 45)
+MUTED = (82, 91, 110)
+FAINT = (130, 145, 165)
+
+WHITE = (255, 255, 255)
+CARD = (255, 255, 255)
+CARD_SOFT = (247, 252, 255)
+CARD_BLUE = (235, 248, 255)
+
+BLUE = (38, 126, 245)
+BLUE_DARK = (8, 43, 90)
+BLUE_SOFT = (166, 213, 250)
+
+TEAL = (31, 188, 175)
+GREEN = (48, 193, 131)
+YELLOW = (255, 192, 53)
+RED = (240, 91, 91)
+
+BORDER = (147, 195, 231)
+BORDER_SOFT = (202, 224, 241)
+
+SHADOW = (90, 136, 172)
+
+BOTTOM_NAV = (252, 254, 255)
+TOP_BAR = (255, 255, 255)
 
 
 # =========================
@@ -57,17 +103,17 @@ def make_font(size, bold=False):
 
 fonts = {
     "brand": make_font(24, True),
-    "hero": make_font(44, True),
-    "hero_small": make_font(34, True),
-    "speed": make_font(86, True),
-    "speed_small": make_font(62, True),
-    "value": make_font(38, True),
-    "value_small": make_font(28, True),
-    "heading": make_font(23, True),
-    "body": make_font(18),
-    "body_bold": make_font(18, True),
-    "small": make_font(15),
-    "tiny": make_font(13),
+    "brand_small": make_font(20, True),
+    "card_title": make_font(25, True),
+    "card_title_small": make_font(20, True),
+    "heading": make_font(24, True),
+    "body": make_font(17),
+    "body_bold": make_font(17, True),
+    "small": make_font(14),
+    "tiny": make_font(12),
+    "speed": make_font(78, True),
+    "speed_small": make_font(56, True),
+    "speed_tiny": make_font(42, True),
 }
 
 
@@ -83,10 +129,10 @@ telemetry_error = ""
 
 def connect_obd_in_background():
     """
-    Tries to connect to OBD without freezing the Pygame window.
+    Tries to connect to the OBD adapter in a background thread.
 
-    If OBD connects, telemetry starts.
-    If OBD fails, the UI keeps running and shows a warning.
+    This keeps the Pygame window responsive. If the adapter fails,
+    the UI still opens and shows offline data instead of crashing.
     """
     global telemetry
     global telemetry_connected
@@ -107,52 +153,105 @@ def connect_obd_in_background():
         telemetry_connecting = False
 
 
-# Start OBD connection attempt in the background.
-obd_thread = threading.Thread(
-    target=connect_obd_in_background,
-    daemon=True,
-)
+obd_thread = threading.Thread(target=connect_obd_in_background, daemon=True)
 obd_thread.start()
+
+
+# =========================
+# ASSET LOADING
+# =========================
+
+image_cache = {}
+
+
+def load_image(name):
+    """
+    Loads an image once and stores it in image_cache.
+
+    convert_alpha() keeps transparent PNG edges smooth.
+    """
+    if name in image_cache:
+        return image_cache[name]
+
+    path = ASSET_PATHS.get(name)
+    if not path or not os.path.exists(path):
+        print(f"[Missing asset] {name}: {path}")
+        image_cache[name] = None
+        return None
+
+    try:
+        img = pygame.image.load(path).convert_alpha()
+        image_cache[name] = img
+        return img
+    except Exception as e:
+        print(f"[Asset load failed] {name}: {e}")
+        image_cache[name] = None
+        return None
+
+
+def blit_image_fit(surface, image, rect, contain=True, alpha=255):
+    """
+    Draws an image inside a rectangle.
+
+    contain=True keeps the whole image visible.
+    contain=False fills the rectangle and crops extra edges.
+    """
+    if image is None:
+        return
+
+    iw, ih = image.get_size()
+    rw, rh = rect.size
+
+    if iw <= 0 or ih <= 0 or rw <= 0 or rh <= 0:
+        return
+
+    if contain:
+        scale = min(rw / iw, rh / ih)
+    else:
+        scale = max(rw / iw, rh / ih)
+
+    new_w = max(1, int(iw * scale))
+    new_h = max(1, int(ih * scale))
+
+    scaled = pygame.transform.smoothscale(image, (new_w, new_h))
+
+    if alpha < 255:
+        scaled = scaled.copy()
+        scaled.set_alpha(alpha)
+
+    x = rect.centerx - new_w // 2
+    y = rect.centery - new_h // 2
+
+    if contain:
+        surface.blit(scaled, (x, y))
+    else:
+        crop = pygame.Rect(
+            max(0, (new_w - rw) // 2),
+            max(0, (new_h - rh) // 2),
+            rw,
+            rh,
+        )
+        surface.blit(scaled, rect.topleft, crop)
 
 
 # =========================
 # UI HELPERS
 # =========================
 
-def lerp_color(a, b, amount):
-    return tuple(int(a[i] + (b[i] - a[i]) * amount) for i in range(3))
-
-
-def draw_background(surface, elapsed):
-    width, height = surface.get_size()
-
-    for y in range(height):
-        amount = y / max(1, height - 1)
-        pygame.draw.line(surface, lerp_color(BG_TOP, BG_BOTTOM, amount), (0, y), (width, y))
-
-    # Subtle dashboard grid and glow accents.
-    grid_color = (19, 27, 42)
-    for x in range(-40, width, 64):
-        pygame.draw.line(surface, grid_color, (x, 0), (x + 90, height), 1)
-
-    pulse = (math.sin(elapsed * 1.8) + 1) / 2
-    glow = pygame.Surface((width, height), pygame.SRCALPHA)
-    pygame.draw.circle(glow, (*BLUE, 23 + int(10 * pulse)), (int(width * 0.22), 0), int(width * 0.36))
-    pygame.draw.circle(glow, (*CYAN, 16), (int(width * 0.90), int(height * 0.16)), int(width * 0.25))
-    surface.blit(glow, (0, 0))
-
-
 def fit_text(text, font, max_width):
     text = str(text)
+
     if font.size(text)[0] <= max_width:
         return text
 
     ellipsis = "..."
     available = max_width - font.size(ellipsis)[0]
+
     if available <= 0:
         return ellipsis
 
     shortened = text
+
     while shortened and font.size(shortened)[0] > available:
         shortened = shortened[:-1]
 
@@ -168,412 +267,1030 @@ def draw_text(text, x, y, font, color=TEXT, max_width=None):
     return text_surface.get_rect(topleft=(x, y))
 
 
-def draw_panel(rect, fill=SURFACE, border=STROKE_SOFT, radius=18, shadow=True):
+def draw_centered_text(text, rect, font, color=TEXT):
+    text_surface = font.render(str(text), True, color)
+    text_rect = text_surface.get_rect(center=rect.center)
+    screen.blit(text_surface, text_rect)
+    return text_rect
+
+
+def draw_round_rect_alpha(surface, rect, color, radius):
+    temp = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+    pygame.draw.rect(temp, color, temp.get_rect(), border_radius=radius)
+    surface.blit(temp, rect)
+
+
+def draw_panel(rect, radius=24, fill=CARD, border=BORDER, shadow=True, shadow_offset=7):
+    """
+    Draws the clean rounded white card style used across the dashboard.
+    """
     if shadow:
-        shadow_rect = rect.move(0, 8)
-        shadow_surface = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
-        pygame.draw.rect(shadow_surface, (*SHADOW, 82), shadow_surface.get_rect(), border_radius=radius)
-        screen.blit(shadow_surface, shadow_rect)
+        shadow_rect = rect.move(0, shadow_offset)
+        draw_round_rect_alpha(
+            screen,
+            shadow_rect,
+            (*SHADOW, 32),
+            radius,
+        )
 
     pygame.draw.rect(screen, fill, rect, border_radius=radius)
     pygame.draw.rect(screen, border, rect, width=1, border_radius=radius)
 
 
-def draw_pill(rect, label, color, fill_alpha=34):
-    pill = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
-    pygame.draw.rect(pill, (*color, fill_alpha), pill.get_rect(), border_radius=rect.height // 2)
-    pygame.draw.rect(pill, (*color, 170), pill.get_rect(), width=1, border_radius=rect.height // 2)
-    screen.blit(pill, rect)
-    draw_text(label, rect.x + 13, rect.y + 6, fonts["tiny"], color, rect.width - 26)
+def draw_soft_circle(center, radius, color=(229, 246, 255), alpha=220):
+    circle = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
+    pygame.draw.circle(circle, (*color, alpha), (radius, radius), radius)
+    screen.blit(circle, (center[0] - radius, center[1] - radius))
 
 
-def draw_status_icon(center, color, state):
-    x, y = center
-    pygame.draw.circle(screen, (12, 18, 28), center, 26)
-    pygame.draw.circle(screen, color, center, 26, width=2)
+def draw_background(width, height):
+    """
+    Uses the generated cartoon road image as the background.
+    It fills the screen and crops slightly if the window ratio changes.
+    """
+    bg = load_image("background")
 
-    if state == "connected":
-        points = [(x - 10, y), (x - 2, y + 8), (x + 13, y - 9)]
-        pygame.draw.lines(screen, color, False, points, 4)
-    elif state == "connecting":
-        pygame.draw.circle(screen, color, center, 10, width=3)
-        pygame.draw.line(screen, color, (x + 8, y + 8), (x + 16, y + 16), 3)
+    if bg:
+        blit_image_fit(screen, bg, pygame.Rect(
+            0, 0, width, height), contain=False)
     else:
-        pygame.draw.line(screen, color, (x - 10, y - 10), (x + 10, y + 10), 3)
-        pygame.draw.line(screen, color, (x + 10, y - 10), (x - 10, y + 10), 3)
+        screen.fill((232, 247, 255))
+
+    # Soft white wash so cards stay readable.
+    overlay = pygame.Surface((width, height), pygame.SRCALPHA)
+    overlay.fill((255, 255, 255, 70))
+    screen.blit(overlay, (0, 0))
 
 
-def draw_mini_car(rect, status_color):
-    body = pygame.Rect(rect.x + 20, rect.y + 28, rect.width - 40, rect.height - 54)
-    cabin = pygame.Rect(rect.x + 52, rect.y + 10, rect.width - 104, 34)
-
-    pygame.draw.rect(screen, (33, 44, 65), body, border_radius=15)
-    pygame.draw.rect(screen, status_color, body, width=2, border_radius=15)
-    pygame.draw.rect(screen, (27, 38, 57), cabin, border_radius=12)
-    pygame.draw.line(screen, (66, 85, 112), (cabin.centerx, cabin.y + 6), (cabin.centerx, cabin.bottom - 6), 1)
-    pygame.draw.circle(screen, (9, 13, 22), (body.x + 34, body.bottom), 15)
-    pygame.draw.circle(screen, (9, 13, 22), (body.right - 34, body.bottom), 15)
-    pygame.draw.circle(screen, status_color, (body.x + 34, body.bottom), 5)
-    pygame.draw.circle(screen, status_color, (body.right - 34, body.bottom), 5)
-
-
-def draw_metric_arc(rect, value, max_value, color):
-    center = (rect.centerx, rect.y + max(46, min(58, rect.height // 3 + 12)))
-    radius = min(rect.width // 3, rect.height // 3, 58)
-    arc_rect = pygame.Rect(0, 0, radius * 2, radius * 2)
-    arc_rect.center = center
-
-    start_angle = math.radians(205)
-    end_angle = math.radians(335)
-    pygame.draw.arc(screen, (43, 55, 76), arc_rect, start_angle, end_angle, 8)
-
-    try:
-        progress = max(0.0, min(float(value) / max_value, 1.0))
-    except (TypeError, ValueError):
-        progress = 0.0
-
-    progress_end = start_angle + (end_angle - start_angle) * progress
-    pygame.draw.arc(screen, color, arc_rect, start_angle, progress_end, 8)
-
-
-def pet_message():
-    if telemetry_connected:
-        return "DashBuddy: I am awake and watching your Corolla."
-
-    if telemetry_connecting:
-        return "DashBuddy: Looking for the OBD adapter so I can wake up."
-
-    return "DashBuddy: Connect the OBD adapter so I can wake up."
+def get_time_text():
+    return datetime.now().strftime("%I:%M %p").lstrip("0")
 
 
 def status_details():
     if telemetry_connecting:
         return {
             "state": "connecting",
-            "title": "Searching for OBD-II adapter",
-            "message": "DashBuddy is awake. Live data will appear when the adapter responds.",
-            "color": CYAN,
+            "title": "Searching",
+            "message": "Looking for OBD",
+            "color": BLUE,
             "pill": "CONNECTING",
         }
 
     if telemetry_connected:
         return {
             "state": "connected",
-            "title": "OBD-II connected",
-            "message": "Live telemetry is active.",
+            "title": "Connected",
+            "message": "Live data active",
             "color": GREEN,
             "pill": "LIVE",
         }
 
     return {
         "state": "offline",
-        "title": "Connect OBD-II adapter",
-        "message": "Live gauges, trip stats, and diagnostics are paused.",
+        "title": "Offline",
+        "message": "Connect OBD adapter",
         "color": YELLOW,
         "pill": "OFFLINE",
     }
 
 
+def pet_message():
+    if telemetry_connected:
+        return "All systems look good!"
+
+    if telemetry_connecting:
+        return "Looking for your OBD adapter..."
+
+    return "Plug in OBD so I can wake up."
+
+
+def home_message():
+    if telemetry_connected:
+        return "Good morning! Dashboard systems go."
+
+    if telemetry_connecting:
+        return "Starting up. Searching for your car data."
+
+    return "Home is ready. OBD features are paused."
+
+
+def safe_data():
+    """
+    Gets telemetry if connected.
+
+    The UI should never crash just because OBD returns something weird.
+    """
+    if telemetry_connected and telemetry:
+        try:
+            speed, rpm, coolant, dtc = telemetry.get_data()
+            return speed, rpm, coolant, dtc
+        except Exception:
+            return 0, 0, 0, "Offline"
+
+    return 0, 0, 0, "Offline"
+
+
 # =========================
-# UI SECTIONS
+# TOP BAR
 # =========================
 
-def draw_top_bar(width, height):
-    top_rect = pygame.Rect(0, 0, width, 78)
-    pygame.draw.rect(screen, (9, 13, 24), top_rect)
-    pygame.draw.line(screen, STROKE_SOFT, (0, top_rect.bottom), (width, top_rect.bottom), 1)
-
-    draw_text("DashBuddy OS", 30, 22, fonts["brand"], TEXT)
-
-    status = status_details()
-    pill_width = 110 if width >= 760 else 92
-    draw_pill(pygame.Rect(width - pill_width - 30, 23, pill_width, 30), status["pill"], status["color"])
-
-    if width >= 790:
-        draw_text("ESC to quit", width - pill_width - 132, 28, fonts["small"], FAINT)
+def draw_wifi_icon(x, y, color=TEXT):
+    pygame.draw.arc(screen, color, pygame.Rect(x, y, 30, 24),
+                    math.radians(205), math.radians(335), 3)
+    pygame.draw.arc(screen, color, pygame.Rect(
+        x + 6, y + 7, 18, 14), math.radians(205), math.radians(335), 3)
+    pygame.draw.circle(screen, color, (x + 15, y + 22), 3)
 
 
-def draw_connection_card(rect):
-    status = status_details()
-    draw_panel(rect, fill=(18, 25, 39), border=status["color"], radius=20)
-    icon_x = rect.x + (36 if rect.height < 72 else 42)
-    draw_status_icon((icon_x, rect.centery), status["color"], status["state"])
-
-    text_x = rect.x + (72 if rect.height < 72 else 82)
-    title_font = fonts["body_bold"] if rect.height < 72 else fonts["heading"]
-    draw_text(status["title"], text_x, rect.y + 12, title_font, TEXT, rect.width - 96)
-    draw_text(status["message"], text_x, rect.y + 40, fonts["small"], MUTED, rect.width - 96)
+def draw_bluetooth_icon(x, y, color=TEXT):
+    points_top = [(x + 8, y), (x + 20, y + 10), (x + 8, y + 20), (x + 8, y)]
+    points_bottom = [(x + 8, y + 20), (x + 20, y + 30),
+                     (x + 8, y + 40), (x + 8, y + 20)]
+    pygame.draw.lines(screen, color, False, points_top, 3)
+    pygame.draw.lines(screen, color, False, points_bottom, 3)
+    pygame.draw.line(screen, color, (x, y + 10), (x + 20, y + 30), 3)
+    pygame.draw.line(screen, color, (x, y + 30), (x + 20, y + 10), 3)
 
 
-def draw_stat_box(rect, label, value, unit="", color=CYAN, max_value=100):
-    draw_panel(rect, fill=SURFACE, border=STROKE_SOFT, radius=18)
-    draw_metric_arc(rect, value, max_value, color)
+def draw_top_bar(width, top_h):
+    rect = pygame.Rect(0, 0, width, top_h)
+    draw_round_rect_alpha(screen, rect, (*TOP_BAR, 244), 0)
+    pygame.draw.line(screen, BORDER_SOFT, (0, top_h - 1),
+                     (width, top_h - 1), 1)
 
-    label_y = rect.y + 15
-    draw_text(label.upper(), rect.x + 18, label_y, fonts["tiny"], FAINT, rect.width - 36)
+    compact = width < 900
 
-    value_font = fonts["value"] if rect.width >= 160 else fonts["value_small"]
-    value_text = fit_text(value, value_font, rect.width - 36)
-    value_rect = value_font.render(str(value_text), True, color).get_rect()
-    value_x = rect.centerx - value_rect.width // 2
-    value_y = rect.y + max(58, rect.height - 76)
-    screen.blit(value_font.render(str(value_text), True, color), (value_x, value_y))
+    brand_font = fonts["brand_small"] if compact else fonts["brand"]
+    draw_text("DashBuddy", 28, top_h // 2 -
+              brand_font.get_height() // 2, brand_font, TEXT)
 
-    if unit:
-        unit_rect = fonts["tiny"].render(unit, True, MUTED).get_rect()
-        screen.blit(fonts["tiny"].render(unit, True, MUTED), (rect.centerx - unit_rect.width // 2, rect.bottom - 27))
+    os_badge_x = 190 if not compact else 164
+    os_badge = pygame.Rect(os_badge_x, top_h // 2 - 16, 38, 32)
+    pygame.draw.rect(screen, BLUE, os_badge, border_radius=8)
+    draw_centered_text("OS", os_badge, fonts["body_bold"], WHITE)
+
+    car_pill_w = 220 if not compact else 180
+    car_pill = pygame.Rect(width // 2 - car_pill_w // 2,
+                           top_h // 2 - 25, car_pill_w, 50)
+    pygame.draw.rect(screen, (250, 253, 255), car_pill, border_radius=25)
+    pygame.draw.rect(screen, BORDER_SOFT, car_pill, width=1, border_radius=25)
+
+    car_text = "Toyota Corolla" if not compact else "Corolla"
+    draw_centered_text(car_text, car_pill, fonts["body_bold"], TEXT)
+
+    if width >= 820:
+        wifi_icon = load_image("wifi")
+
+        wifi_rect = pygame.Rect(
+            width - 220,
+            top_h // 2 - 17,
+            34,
+            34,
+        )
+
+        blit_image_fit(screen, wifi_icon, wifi_rect, contain=True)
+
+        draw_bluetooth_icon(width - 155, top_h // 2 - 20)
+
+        draw_text(
+            get_time_text(),
+            width - 92,
+            top_h // 2 - 12,
+            fonts["body_bold"],
+            TEXT,
+        )
+# =========================
+# CARDS
+# =========================
+
+
+def draw_buddy_panel(rect):
+    draw_panel(rect, radius=28, fill=(255, 255, 255),
+               border=BORDER, shadow=True)
+
+    title_font = fonts["card_title"] if rect.width >= 300 else fonts["card_title_small"]
+    draw_text("Buddy", rect.x + 28, rect.y + 24,
+              title_font, TEXT, rect.width - 56)
+
+    bubble_w = min(rect.width - 64, 230)
+    bubble_h = 86
+    bubble = pygame.Rect(rect.x + 26, rect.y + 78, bubble_w, bubble_h)
+
+    pygame.draw.rect(screen, WHITE, bubble, border_radius=16)
+    pygame.draw.rect(screen, BORDER, bubble, width=1, border_radius=16)
+
+    # Speech bubble tail.
+    tail = [
+        (bubble.right - 6, bubble.centery + 10),
+        (bubble.right + 20, bubble.centery + 20),
+        (bubble.right - 6, bubble.centery + 28),
+    ]
+    pygame.draw.polygon(screen, WHITE, tail)
+    pygame.draw.lines(screen, BORDER, False, [tail[0], tail[1], tail[2]], 1)
+
+    draw_text("Ready to roll!", bubble.x + 16, bubble.y + 16,
+              fonts["body_bold"], TEXT, bubble.width - 32)
+    draw_text("I'm here to make", bubble.x + 16, bubble.y +
+              46, fonts["small"], TEXT, bubble.width - 32)
+    draw_text("your drive awesome.", bubble.x + 16, bubble.y +
+              66, fonts["small"], TEXT, bubble.width - 32)
+
+    # Small sparkle decoration.
+    star_x = rect.right - 44
+    star_y = rect.y + 130
+    pygame.draw.line(screen, BLUE, (star_x, star_y - 14),
+                     (star_x, star_y + 14), 2)
+    pygame.draw.line(screen, BLUE, (star_x - 14, star_y),
+                     (star_x + 14, star_y), 2)
+
+    bmo = load_image("bmo")
+    img_rect = pygame.Rect(
+        rect.x + int(rect.width * 0.20),
+        rect.y + int(rect.height * 0.34),
+        int(rect.width * 0.60),
+        int(rect.height * 0.45),
+    )
+    blit_image_fit(screen, bmo, img_rect, contain=True)
+
+    status_bar = pygame.Rect(
+        rect.x + 24, rect.bottom - 54, rect.width - 48, 36)
+    pygame.draw.rect(screen, (242, 249, 255), status_bar, border_radius=18)
+    pygame.draw.circle(
+        screen, BLUE, (status_bar.x + 28, status_bar.centery), 9)
+    draw_text(pet_message(), status_bar.x + 52, status_bar.y +
+              8, fonts["small"], BLUE, status_bar.width - 70)
+
+
+def draw_app_card(rect, label, icon_name, mouse_pos, enabled=True):
+    hovered = rect.collidepoint(mouse_pos) and enabled
+
+    fill = (255, 255, 255) if not hovered else (244, 251, 255)
+    border = BLUE if hovered else BORDER
+
+    draw_panel(rect, radius=22, fill=fill, border=border, shadow=True)
+
+    icon = load_image(icon_name)
+
+    circle_radius = min(rect.width, rect.height) // 3
+    circle_radius = max(46, min(circle_radius, 72))
+
+    circle_center = (
+        rect.centerx,
+        rect.y + int(rect.height * 0.36),
+    )
+
+    draw_soft_circle(circle_center, circle_radius, (229, 246, 255), 235)
+
+    # The PNG itself already has padding, so the box needs to be large.
+    icon_size = int(circle_radius * 1.75)
+
+    icon_rect = pygame.Rect(0, 0, icon_size, icon_size)
+    icon_rect.center = circle_center
+
+    blit_image_fit(screen, icon, icon_rect, contain=True)
+
+    label_font = fonts["heading"] if rect.height >= 145 else fonts["body_bold"]
+
+    label_rect = pygame.Rect(
+        rect.x + 8,
+        rect.bottom - 52,
+        rect.width - 16,
+        36,
+    )
+
+    draw_centered_text(label, label_rect, label_font, TEXT)
 
 
 def draw_speed_card(rect, speed):
+    draw_panel(rect, radius=24, fill=WHITE, border=BORDER_SOFT, shadow=True)
+
+    draw_text("Speed", rect.x + 24, rect.y + 22, fonts["body_bold"], MUTED)
+
+    try:
+        speed_num = int(float(speed))
+    except Exception:
+        speed_num = 0
+
+    if rect.height < 120:
+        speed_font = fonts["speed_tiny"]
+    elif rect.width < 250:
+        speed_font = fonts["speed_small"]
+    else:
+        speed_font = fonts["speed"]
+
+    speed_surface = speed_font.render(str(speed_num), True, TEXT)
+    unit_surface = fonts["body_bold"].render("MPH", True, MUTED)
+
+    number_y = rect.y + int(rect.height * 0.33)
+    number_x = rect.centerx - speed_surface.get_width() // 2 - 12
+
+    screen.blit(speed_surface, (number_x, number_y))
+
+    unit_x = number_x + speed_surface.get_width() + 10
+    unit_y = number_y + speed_surface.get_height() - unit_surface.get_height() - 10
+    screen.blit(unit_surface, (unit_x, unit_y))
+
+    bar_w = rect.width - 48
+    bar_h = 10
+
+    # Push the bar lower so it never crosses the number.
+    bar_y = max(
+        number_y + speed_surface.get_height() + 8,
+        rect.bottom - 38,
+    )
+
+    # Safety clamp in case the card becomes short.
+    bar_y = min(bar_y, rect.bottom - 24)
+
+    bar = pygame.Rect(rect.x + 24, bar_y, bar_w, bar_h)
+
+    pygame.draw.rect(screen, (218, 231, 242), bar, border_radius=bar_h // 2)
+
+    progress = max(0, min(speed_num / 120, 1))
+    fill = pygame.Rect(bar.x, bar.y, int(bar.width * progress), bar.height)
+
+    if fill.width > 0:
+        pygame.draw.rect(screen, BLUE, fill, border_radius=bar_h // 2)
+
+
+def draw_obd_card(rect):
     status = status_details()
-    draw_panel(rect, fill=(18, 27, 43), border=status["color"], radius=22)
 
-    draw_text("SPEED", rect.x + 24, rect.y + 22, fonts["tiny"], FAINT, rect.width - 48)
+    draw_panel(rect, radius=22, fill=WHITE, border=BORDER_SOFT, shadow=True)
 
-    speed_font = fonts["speed"] if rect.width >= 380 and rect.height >= 240 else fonts["speed_small"]
-    speed_text = fit_text(speed, speed_font, rect.width - 96)
-    speed_surface = speed_font.render(str(speed_text), True, CYAN)
-    speed_rect = speed_surface.get_rect(center=(rect.centerx, rect.y + rect.height * 0.36))
-    screen.blit(speed_surface, speed_rect)
+    draw_text("OBD Status", rect.x + 22, rect.y + 20,
+              fonts["body_bold"], (73, 95, 88), rect.width - 44)
 
-    unit_surface = fonts["heading"].render("MPH", True, MUTED)
-    unit_rect = unit_surface.get_rect(center=(rect.centerx, speed_rect.bottom + 18))
-    screen.blit(unit_surface, unit_rect)
+    inner = pygame.Rect(rect.x + 18, rect.y + 70,
+                        rect.width - 36, rect.height - 92)
+    inner_h = max(54, min(inner.height, 72))
+    inner = pygame.Rect(inner.x, inner.y, inner.width, inner_h)
 
-    car_h = max(74, min(118, rect.height // 3))
-    car_rect = pygame.Rect(rect.x + 24, rect.bottom - car_h - 22, min(220, rect.width // 2), car_h)
-    draw_mini_car(car_rect, status["color"])
+    pygame.draw.rect(screen, (224, 250, 246), inner, border_radius=16)
 
-    message_x = car_rect.right + 20
-    if message_x + 180 > rect.right:
-        message_x = rect.x + 24
-        message_y = car_rect.y - 62
-        max_width = rect.width - 48
+    icon_box = pygame.Rect(inner.x + 16, inner.centery - 18, 36, 36)
+    pygame.draw.rect(screen, (208, 245, 240), icon_box, border_radius=8)
+    pygame.draw.rect(screen, (77, 145, 152), icon_box,
+                     width=2, border_radius=8)
+
+    pygame.draw.rect(screen, (82, 140, 151), (icon_box.x + 7,
+                     icon_box.y + 9, 22, 13), width=2, border_radius=3)
+    for i in range(3):
+        pygame.draw.circle(screen, (82, 140, 151),
+                           (icon_box.x + 10 + i * 7, icon_box.y + 28), 2)
+
+    check_center = (inner.x + 76, inner.centery)
+    pygame.draw.circle(screen, status["color"], check_center, 14)
+    if status["state"] == "connected":
+        pygame.draw.lines(
+            screen,
+            WHITE,
+            False,
+            [
+                (check_center[0] - 6, check_center[1]),
+                (check_center[0] - 1, check_center[1] + 5),
+                (check_center[0] + 8, check_center[1] - 7),
+            ],
+            3,
+        )
+    elif status["state"] == "connecting":
+        pygame.draw.circle(screen, WHITE, check_center, 6, width=2)
     else:
-        message_y = car_rect.y + 16
-        max_width = rect.right - message_x - 24
+        pygame.draw.line(
+            screen, WHITE, (check_center[0] - 6, check_center[1] - 6), (check_center[0] + 6, check_center[1] + 6), 3)
+        pygame.draw.line(
+            screen, WHITE, (check_center[0] + 6, check_center[1] - 6), (check_center[0] - 6, check_center[1] + 6), 3)
 
-    draw_text(pet_message(), message_x, message_y, fonts["body_bold"], TEXT, max_width)
-    draw_text(status["message"], message_x, message_y + 30, fonts["small"], MUTED, max_width)
-
-
-def draw_secondary_metric(rect, label, value, unit, color, max_value):
-    draw_panel(rect, fill=SURFACE, border=STROKE_SOFT, radius=18)
-    draw_metric_arc(rect, value, max_value, color)
-
-    draw_text(label.upper(), rect.x + 18, rect.y + 14, fonts["tiny"], FAINT, rect.width - 36)
-    value_font = fonts["value"] if rect.width >= 190 else fonts["value_small"]
-    value_text = fit_text(value, value_font, rect.width - 36)
-    value_surface = value_font.render(str(value_text), True, color)
-    value_rect = value_surface.get_rect(center=(rect.centerx, rect.y + rect.height * 0.58))
-    screen.blit(value_surface, value_rect)
-
-    if unit:
-        unit_surface = fonts["tiny"].render(unit, True, MUTED)
-        unit_rect = unit_surface.get_rect(center=(rect.centerx, rect.bottom - 22))
-        screen.blit(unit_surface, unit_rect)
+    text_x = inner.x + 100
+    draw_text(status["title"], text_x, inner.y + 14,
+              fonts["body_bold"], TEXT, inner.right - text_x - 10)
+    draw_text(status["message"], text_x, inner.y + 39,
+              fonts["small"], MUTED, inner.right - text_x - 10)
 
 
-def draw_pet_panel(rect):
-    status = status_details()
-    draw_panel(rect, fill=SURFACE_2, border=STROKE_SOFT, radius=20)
+def draw_weather_card(rect):
+    draw_panel(rect, radius=22, fill=WHITE, border=BORDER_SOFT, shadow=True)
 
-    car_width = min(168, max(120, rect.width // 2 - 18), rect.width - 28)
-    car_rect = pygame.Rect(rect.x + 14, rect.y + 16, car_width, rect.height - 28)
-    draw_mini_car(car_rect, status["color"])
+    sun_x = rect.x + 36
+    sun_y = rect.centery
+    pygame.draw.circle(screen, YELLOW, (sun_x, sun_y), 13)
 
-    text_x = car_rect.right + 18
-    if text_x + 120 > rect.right:
-        text_x = rect.x + 20
-        text_y = rect.y + rect.height - 70
-    else:
-        text_y = rect.y + 27
+    for angle in range(0, 360, 45):
+        rad = math.radians(angle)
+        x1 = sun_x + int(math.cos(rad) * 20)
+        y1 = sun_y + int(math.sin(rad) * 20)
+        x2 = sun_x + int(math.cos(rad) * 27)
+        y2 = sun_y + int(math.sin(rad) * 27)
+        pygame.draw.line(screen, YELLOW, (x1, y1), (x2, y2), 2)
 
-    if telemetry_connected:
-        line = "Connected and ready."
-    elif telemetry_connecting:
-        line = "Looking for your adapter."
-    else:
-        line = "Adapter needed for live data."
-
-    title_font = fonts["body_bold"] if rect.height < 100 else fonts["heading"]
-    draw_text("DashBuddy", text_x, text_y, title_font, TEXT, rect.right - text_x - 18)
-    draw_text(line, text_x, text_y + 31, fonts["small"], MUTED, rect.right - text_x - 18)
+    draw_text("72°F", rect.x + 78, rect.y + 22,
+              fonts["body_bold"], TEXT, rect.width - 92)
+    draw_text("Sunny", rect.x + 78, rect.y + 48,
+              fonts["small"], MUTED, rect.width - 92)
 
 
-def draw_button_icon(rect, title, color):
-    center = rect.center
+def draw_message_bar(rect):
+    draw_panel(rect, radius=20, fill=(252, 254, 255),
+               border=BORDER, shadow=True)
 
-    if title == "Maps":
-        pygame.draw.circle(screen, color, center, 13, width=3)
-        pygame.draw.circle(screen, color, center, 4)
-        pygame.draw.polygon(screen, color, [(center[0], center[1] + 21), (center[0] - 7, center[1] + 8), (center[0] + 7, center[1] + 8)])
-    elif title == "Music":
-        pygame.draw.line(screen, color, (center[0] - 5, center[1] - 14), (center[0] - 5, center[1] + 10), 4)
-        pygame.draw.line(screen, color, (center[0] + 11, center[1] - 10), (center[0] + 11, center[1] + 14), 4)
-        pygame.draw.line(screen, color, (center[0] - 5, center[1] - 14), (center[0] + 11, center[1] - 10), 4)
-        pygame.draw.circle(screen, color, (center[0] - 10, center[1] + 12), 7)
-        pygame.draw.circle(screen, color, (center[0] + 6, center[1] + 16), 7)
-    elif title == "Trips":
-        pygame.draw.circle(screen, color, (center[0] - 12, center[1] - 10), 5)
-        pygame.draw.circle(screen, color, (center[0] + 13, center[1] + 12), 5)
-        pygame.draw.line(screen, color, (center[0] - 8, center[1] - 6), (center[0] + 9, center[1] + 8), 3)
-    elif title == "Settings":
-        pygame.draw.circle(screen, color, center, 14, width=3)
-        pygame.draw.circle(screen, color, center, 4)
-        for angle in range(0, 360, 60):
-            radians = math.radians(angle)
-            x1 = center[0] + int(math.cos(radians) * 18)
-            y1 = center[1] + int(math.sin(radians) * 18)
-            x2 = center[0] + int(math.cos(radians) * 24)
-            y2 = center[1] + int(math.sin(radians) * 24)
-            pygame.draw.line(screen, color, (x1, y1), (x2, y2), 3)
+    pygame.draw.circle(screen, BLUE, (rect.x + 30, rect.centery), 7)
+    draw_text(home_message(), rect.x + 56, rect.y + 19,
+              fonts["body"], TEXT, rect.width - 110)
+
+    # Right chevron.
+    cx = rect.right - 34
+    cy = rect.centery
+    pygame.draw.line(screen, TEXT, (cx - 5, cy - 8), (cx + 4, cy), 3)
+    pygame.draw.line(screen, TEXT, (cx + 4, cy), (cx - 5, cy + 8), 3)
 
 
-def draw_touch_button(rect, title, accent, mouse_pos, enabled=True):
-    hovered = rect.collidepoint(mouse_pos) and enabled
-    fill = SURFACE_HOVER if hovered else SURFACE
-    border = accent if hovered and enabled else STROKE_SOFT
-    draw_panel(rect, fill=fill, border=border, radius=18)
+def draw_bottom_nav(rect):
+    draw_round_rect_alpha(screen, rect, (*BOTTOM_NAV, 245), 28)
+    pygame.draw.rect(screen, BORDER_SOFT, rect, width=1, border_radius=28)
 
-    icon_size = 44 if rect.height >= 86 else 38
-    icon_rect = pygame.Rect(rect.x + 18, rect.centery - icon_size // 2, icon_size, icon_size)
-    icon = pygame.Surface((icon_size, icon_size), pygame.SRCALPHA)
-    pygame.draw.rect(icon, (*accent, 34 if enabled else 18), icon.get_rect(), border_radius=10)
-    pygame.draw.rect(icon, (*accent, 180 if enabled else 80), icon.get_rect(), width=1, border_radius=10)
-    screen.blit(icon, icon_rect)
-
-    icon_color = accent if enabled else FAINT
-    draw_button_icon(icon_rect, title, icon_color)
-
-    title_color = TEXT if enabled else FAINT
-    text_x = rect.x + icon_size + 30
-    draw_text(title, text_x, rect.centery - 11, fonts["body_bold"], title_color, rect.right - text_x - 16)
-
-
-def draw_home_screen(width, height, mouse_pos, elapsed):
-    del elapsed
-
-    if telemetry_connected and telemetry:
-        speed, rpm, coolant, dtc = telemetry.get_data()
-    else:
-        speed = 0
-        rpm = 0
-        coolant = 0
-        dtc = "Offline"
-
-    margin = 30 if width >= 760 else 18
-    gap = 18 if width >= 760 else 10
-    content_top = 100 if height >= 560 else 88
-    content_w = width - margin * 2
-    compact = width < 780
-    short = height < 560
-
-    button_specs = [
-        ("Maps", BLUE, False),
-        ("Music", CYAN, False),
-        ("Trips", GREEN, telemetry_connected),
-        ("Settings", YELLOW, True),
+    items = [
+        ("Home", "home"),
+        ("Media", "media"),
+        ("Apps", "apps"),
+        ("Alerts", "alerts"),
+        ("Vehicle", "vehicle"),
     ]
 
-    if compact:
-        speed_h = 220 if not short else 178
-        draw_speed_card(pygame.Rect(margin, content_top, content_w, speed_h), speed)
+    slot_w = rect.width / len(items)
 
-        metric_y = content_top + speed_h + gap
-        metric_h = 104 if short else 122
-        metric_w = (content_w - gap * 2) // 3
-        metric_specs = [
-            ("RPM", rpm, "rev/min", GREEN, 7000),
-            ("Coolant", coolant, "F", YELLOW, 240),
-            ("Codes", dtc, "", GREEN if dtc == "Clear" else RED, 1),
-        ]
-        for index, spec in enumerate(metric_specs):
-            rect = pygame.Rect(margin + index * (metric_w + gap), metric_y, metric_w, metric_h)
-            draw_secondary_metric(rect, *spec)
+    for i, (label, kind) in enumerate(items):
+        center_x = int(rect.x + slot_w * i + slot_w / 2)
+        icon_y = rect.y + 28
+        label_y = rect.y + 54
 
-        button_y = metric_y + metric_h + gap
-        button_h = 72 if short else 84
-        button_w = (content_w - gap) // 2
-        for index, (title, color, enabled) in enumerate(button_specs):
-            row = index // 2
-            col = index % 2
-            rect = pygame.Rect(margin + col * (button_w + gap), button_y + row * (button_h + gap), button_w, button_h)
-            if rect.bottom <= height - 12:
-                draw_touch_button(rect, title, color, mouse_pos, enabled)
+        active = i == 0
+        color = BLUE if active else (62, 70, 84)
+
+        if kind == "home":
+            pygame.draw.polygon(screen, color, [
+                (center_x - 12, icon_y + 7),
+                (center_x, icon_y - 6),
+                (center_x + 12, icon_y + 7),
+            ])
+            pygame.draw.rect(screen, color, pygame.Rect(
+                center_x - 9, icon_y + 7, 18, 15), border_radius=3)
+
+        elif kind == "media":
+            pygame.draw.line(screen, color, (center_x - 3,
+                             icon_y - 8), (center_x - 3, icon_y + 12), 3)
+            pygame.draw.line(screen, color, (center_x + 9,
+                             icon_y - 5), (center_x + 9, icon_y + 14), 3)
+            pygame.draw.circle(screen, color, (center_x - 8, icon_y + 14), 5)
+            pygame.draw.circle(screen, color, (center_x + 4, icon_y + 16), 5)
+
+        elif kind == "apps":
+            for row in range(3):
+                for col in range(3):
+                    pygame.draw.circle(
+                        screen, color, (center_x - 10 + col * 10, icon_y - 5 + row * 10), 3)
+
+        elif kind == "alerts":
+            pygame.draw.arc(screen, color, pygame.Rect(
+                center_x - 10, icon_y - 8, 20, 22), math.radians(200), math.radians(-20), 3)
+            pygame.draw.line(screen, color, (center_x - 11,
+                             icon_y + 11), (center_x + 11, icon_y + 11), 3)
+            pygame.draw.circle(screen, color, (center_x, icon_y + 16), 3)
+
+        elif kind == "vehicle":
+            pygame.draw.rect(screen, color, pygame.Rect(
+                center_x - 14, icon_y - 2, 28, 14), width=2, border_radius=5)
+            pygame.draw.circle(screen, color, (center_x - 8, icon_y + 14), 3)
+            pygame.draw.circle(screen, color, (center_x + 8, icon_y + 14), 3)
+
+        label_surface = fonts["small"].render(label, True, color)
+        label_rect = label_surface.get_rect(center=(center_x, label_y))
+        screen.blit(label_surface, label_rect)
+
+
+def launch_carplay():
+    """
+    Launches the CarPlay AppImage.
+
+    poll() returns None while the program is still running, which prevents
+    DashBuddy from opening multiple copies when the button is clicked twice.
+    """
+    global carplay_process
+
+    if carplay_process is not None and carplay_process.poll() is None:
+        print("[CarPlay] Already running")
         return
 
-    bottom_h = 96 if not short else 78
-    main_top = content_top
-    main_h = max(260, height - main_top - bottom_h - gap - margin)
-    left_w = int(content_w * 0.58)
-    right_w = content_w - left_w - gap
+    if not os.path.exists(CARPLAY_PATH):
+        print(f"[CarPlay] AppImage not found: {CARPLAY_PATH}")
+        return
 
-    draw_speed_card(pygame.Rect(margin, main_top, left_w, main_h), speed)
+    try:
+        carplay_process = subprocess.Popen(
+            [CARPLAY_PATH],
+            cwd=os.path.dirname(CARPLAY_PATH),
+        )
 
-    metric_h = (main_h - gap * 2) // 3
-    metric_specs = [
-        ("RPM", rpm, "rev/min", GREEN, 7000),
-        ("Coolant", coolant, "F", YELLOW, 240),
-        ("Codes", dtc, "", GREEN if dtc == "Clear" else RED, 1),
-    ]
-    metric_x = margin + left_w + gap
-    for index, spec in enumerate(metric_specs):
-        rect = pygame.Rect(metric_x, main_top + index * (metric_h + gap), right_w, metric_h)
-        draw_secondary_metric(rect, *spec)
+        print("[CarPlay] Launched successfully")
 
-    button_y = main_top + main_h + gap
-    button_w = (content_w - gap * 3) // 4
-    for index, (title, color, enabled) in enumerate(button_specs):
-        rect = pygame.Rect(margin + index * (button_w + gap), button_y, button_w, bottom_h)
-        draw_touch_button(rect, title, color, mouse_pos, enabled)
+    except PermissionError:
+        print("[CarPlay] Permission denied.")
+        print(f"Run: chmod +x {CARPLAY_PATH}")
 
+    except Exception as error:
+        print(f"[CarPlay] Failed to launch: {error}")
+
+# =========================
+# RESPONSIVE HOME LAYOUT
+# =========================
+
+
+def handle_mouse_click(mouse_position):
+    global current_screen
+
+    if current_screen != "home":
+        return
+
+    for screen_name, rect in click_targets.items():
+        if rect is None:
+            continue
+
+        if not rect.collidepoint(mouse_position):
+            continue
+
+        if screen_name == "carplay":
+            launch_carplay()
+        else:
+            current_screen = screen_name
+            print(f"Opening screen: {screen_name}")
+
+        return
+
+
+def draw_placeholder_screen(width, height, title):
+    draw_background(width, height)
+
+    top_h = max(68, min(82, int(height * 0.12)))
+    draw_top_bar(width, top_h)
+
+    content_rect = pygame.Rect(
+        40,
+        top_h + 30,
+        width - 80,
+        height - top_h - 70,
+    )
+
+    draw_panel(
+        content_rect,
+        radius=28,
+        fill=WHITE,
+        border=BORDER,
+        shadow=True,
+    )
+
+    title_rect = pygame.Rect(
+        content_rect.x,
+        content_rect.y + 60,
+        content_rect.width,
+        60,
+    )
+
+    draw_centered_text(
+        title,
+        title_rect,
+        fonts["card_title"],
+        TEXT,
+    )
+
+    message_rect = pygame.Rect(
+        content_rect.x,
+        content_rect.y + 130,
+        content_rect.width,
+        50,
+    )
+
+    draw_centered_text(
+        "This screen is under construction.",
+        message_rect,
+        fonts["body"],
+        MUTED,
+    )
+
+    back_rect = pygame.Rect(
+        content_rect.x + 30,
+        content_rect.y + 30,
+        110,
+        48,
+    )
+
+    pygame.draw.rect(screen, CARD_BLUE, back_rect, border_radius=16)
+    pygame.draw.rect(
+        screen,
+        BORDER,
+        back_rect,
+        width=1,
+        border_radius=16,
+    )
+
+    draw_centered_text(
+        "← Home",
+        back_rect,
+        fonts["body_bold"],
+        BLUE,
+    )
+
+    return back_rect
+
+
+def draw_home_screen(width, height, mouse_pos):
+
+    # Clear positions from the previous frame.
+    # The responsive layout will replace the visible ones below.
+    for screen_name in click_targets:
+        click_targets[screen_name] = None
+    speed, rpm, coolant, dtc = safe_data()
+
+    top_h = max(70, min(86, int(height * 0.12)))
+    bottom_h = max(64, min(82, int(height * 0.115)))
+
+    # Max content width keeps the layout from stretching too wide on laptops.
+    max_content_w = 1280
+    content_w = min(width - 40, max_content_w)
+    margin_x = (width - content_w) // 2
+
+    gap = max(14, int(content_w * 0.014))
+
+    content_top = top_h + 24
+    nav_rect = pygame.Rect(8, height - bottom_h - 8, width - 16, bottom_h)
+
+    content_bottom = nav_rect.y - 14
+    content_h = content_bottom - content_top
+
+    message_h = 54
+    main_h = content_h - message_h - gap
+
+    if width >= 900:
+        # Better proportions. Buddy no longer takes too much space.
+        left_w = int(content_w * 0.31)
+        right_w = int(content_w * 0.20)
+        center_w = content_w - left_w - right_w - gap * 2
+
+        left_x = margin_x
+        center_x = left_x + left_w + gap
+        right_x = center_x + center_w + gap
+
+        buddy_rect = pygame.Rect(left_x, content_top, left_w, main_h)
+        draw_buddy_panel(buddy_rect)
+
+        # App grid
+        card_w = (center_w - gap * 2) // 3
+        card_h = (main_h - gap) // 2
+
+        app_cards = [
+            ("CarPlay", "carplay", "carplay"),
+            ("Trips", "trips", "trips"),
+            ("Telemetry", "telemetry", "telemetry"),
+            ("Settings", "settings", "settings"),
+            ("Apps", "apps", "apps"),
+            ("Media", None, "media"),
+        ]
+
+        for index, (label, icon, screen_name) in enumerate(app_cards):
+            row = index // 3
+            col = index % 3
+
+            rect = pygame.Rect(
+                center_x + col * (card_w + gap),
+                content_top + row * (card_h + gap),
+                card_w,
+                card_h,
+            )
+
+            click_targets[screen_name] = rect
+
+            if icon is None:
+                draw_media_card(rect, mouse_pos)
+            else:
+                draw_app_card(rect, label, icon, mouse_pos)
+        # Right status column
+        speed_h = int(main_h * 0.30)
+        obd_h = int(main_h * 0.36)
+        weather_h = main_h - speed_h - obd_h - gap * 2
+
+        speed_rect = pygame.Rect(right_x, content_top, right_w, speed_h)
+        obd_rect = pygame.Rect(
+            right_x, speed_rect.bottom + gap, right_w, obd_h)
+        weather_rect = pygame.Rect(
+            right_x, obd_rect.bottom + gap, right_w, weather_h)
+
+        draw_speed_card(speed_rect, speed)
+        draw_obd_card(obd_rect)
+
+        if weather_rect.height >= 74:
+            draw_weather_card(weather_rect)
+
+        msg_rect = pygame.Rect(
+            left_x,
+            content_top + main_h + gap,
+            left_w + gap + center_w,
+            message_h,
+        )
+        draw_message_bar(msg_rect)
+
+    elif width >= 760:
+        left_w = int(content_w * 0.36)
+        right_w = content_w - left_w - gap
+
+        left_x = margin_x
+        grid_x = left_x + left_w + gap
+
+        buddy_rect = pygame.Rect(left_x, content_top, left_w, main_h)
+        draw_buddy_panel(buddy_rect)
+
+        card_w = (right_w - gap) // 2
+        card_h = (main_h - gap * 2) // 3
+
+        app_cards = [
+            ("CarPlay", "carplay", "carplay"),
+            ("Trips", "trips", "trips"),
+            ("Telemetry", "telemetry", "telemetry"),
+            ("Settings", "settings", "settings"),
+            ("Apps", "apps", "apps"),
+            ("Media", None, "media"),
+        ]
+
+        for index, (label, icon, screen_name) in enumerate(app_cards):
+            row = index // 2
+            col = index % 2
+
+            rect = pygame.Rect(
+                grid_x + col * (card_w + gap),
+                content_top + row * (card_h + gap),
+                card_w,
+                card_h,
+            )
+
+            # Save this card's current position for click detection.
+            click_targets[screen_name] = rect
+
+            if icon is None:
+                draw_media_card(rect, mouse_pos)
+            else:
+                draw_app_card(rect, label, icon, mouse_pos)
+
+        msg_rect = pygame.Rect(
+            left_x,
+            content_top + main_h + gap,
+            content_w,
+            message_h,
+        )
+        draw_message_bar(msg_rect)
+
+    else:
+        buddy_h = 170
+        card_h = 110
+
+        buddy_rect = pygame.Rect(margin_x, content_top, content_w, buddy_h)
+        draw_buddy_panel(buddy_rect)
+
+        y = buddy_rect.bottom + gap
+        card_w = (content_w - gap) // 2
+
+        cards = [
+            ("CarPlay", "carplay", "carplay"),
+            ("Trips", "trips", "trips"),
+            ("Telemetry", "telemetry", "telemetry"),
+            ("Settings", "settings", "settings"),
+        ]
+
+        for index, (label, icon, screen_name) in enumerate(cards):
+            row = index // 2
+            col = index % 2
+
+            rect = pygame.Rect(
+                margin_x + col * (card_w + gap),
+                y + row * (card_h + gap),
+                card_w,
+                card_h,
+            )
+
+            if rect.bottom < nav_rect.y - message_h - 10:
+                click_targets[screen_name] = rect
+                draw_app_card(rect, label, icon, mouse_pos)
+            else:
+                click_targets[screen_name] = None
+
+        msg_rect = pygame.Rect(
+            margin_x,
+            nav_rect.y - message_h - 10,
+            content_w,
+            message_h,
+        )
+        draw_message_bar(msg_rect)
+
+    draw_bottom_nav(nav_rect)
+
+
+def draw_media_card(rect, mouse_pos):
+    hovered = rect.collidepoint(mouse_pos)
+
+    draw_panel(
+        rect,
+        radius=22,
+        fill=(244, 251, 255) if hovered else WHITE,
+        border=BLUE if hovered else BORDER,
+        shadow=True,
+    )
+
+    circle_radius = min(rect.width, rect.height) // 3
+    circle_radius = max(46, min(circle_radius, 72))
+
+    circle_center = (
+        rect.centerx,
+        rect.y + int(rect.height * 0.36),
+    )
+
+    draw_soft_circle(circle_center, circle_radius, (229, 246, 255), 235)
+
+    cx, cy = circle_center
+    color = BLUE
+
+    scale = circle_radius / 58
+    stem_h = int(42 * scale)
+    gap = int(24 * scale)
+    note_r = int(10 * scale)
+
+    pygame.draw.line(screen, color, (cx - gap // 2, cy - stem_h // 2),
+                     (cx - gap // 2, cy + stem_h // 2), max(4, int(5 * scale)))
+    pygame.draw.line(screen, color, (cx + gap // 2, cy - stem_h // 3),
+                     (cx + gap // 2, cy + stem_h // 2), max(4, int(5 * scale)))
+    pygame.draw.line(screen, color, (cx - gap // 2, cy - stem_h // 2),
+                     (cx + gap // 2, cy - stem_h // 3), max(4, int(5 * scale)))
+
+    pygame.draw.circle(screen, color, (cx - gap // 2 -
+                       8, cy + stem_h // 2), note_r)
+    pygame.draw.circle(screen, color, (cx + gap // 2 -
+                       8, cy + stem_h // 2 + 4), note_r)
+
+    label_font = fonts["heading"] if rect.height >= 145 else fonts["body_bold"]
+
+    label_rect = pygame.Rect(
+        rect.x + 8,
+        rect.bottom - 52,
+        rect.width - 16,
+        36,
+    )
+
+    draw_centered_text("Media", label_rect, label_font, TEXT)
 
 # =========================
 # MAIN PROGRAM
 # =========================
 
+
 def main():
     """
-    Runs the DashBuddy UI.
+    Runs DashBuddy OS.
 
-    The UI always stays open. OBD runs only if the adapter connects successfully.
+    The main loop:
+    1. Reads keyboard, mouse, resize, and quit events.
+    2. Updates the current screen.
+    3. Draws the selected screen.
+    4. Refreshes the display.
     """
     global screen
     global telemetry
+    global current_screen
 
     running = True
+    back_button = None
+
+    # Preload images once at startup.
+    for key in ASSET_PATHS:
+        load_image(key)
 
     while running:
         clock.tick(FPS)
-        elapsed = pygame.time.get_ticks() / 1000
         mouse_pos = pygame.mouse.get_pos()
 
-        # Always process events so the window does not say Not Responding.
+        # =========================
+        # EVENT HANDLING
+        # =========================
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
 
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    # Escape returns home first.
+                    # Pressing Escape on Home closes the program.
+                    if current_screen == "home":
+                        running = False
+                    else:
+                        current_screen = "home"
 
-            if event.type == pygame.VIDEORESIZE:
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 1:
+                    # Handle clicks on the Home screen cards.
+                    if current_screen == "home":
+                        handle_mouse_click(event.pos)
+
+                    # Handle the back button on other screens.
+                    elif (
+                        back_button is not None
+                        and back_button.collidepoint(event.pos)
+                    ):
+                        current_screen = "home"
+
+            elif event.type == pygame.VIDEORESIZE:
                 new_width = max(MIN_WIDTH, event.w)
                 new_height = max(MIN_HEIGHT, event.h)
-                screen = pygame.display.set_mode((new_width, new_height), pygame.RESIZABLE)
+
+                screen = pygame.display.set_mode(
+                    (new_width, new_height),
+                    pygame.RESIZABLE,
+                )
+
+        # =========================
+        # SCREEN DRAWING
+        # =========================
 
         width, height = screen.get_size()
-        draw_background(screen, elapsed)
-        draw_top_bar(width, height)
-        draw_home_screen(width, height, mouse_pos, elapsed)
+        back_button = None
 
+        if current_screen == "home":
+            draw_background(width, height)
+
+            draw_top_bar(
+                width,
+                max(68, min(82, int(height * 0.12))),
+            )
+
+            draw_home_screen(
+                width,
+                height,
+                mouse_pos,
+            )
+
+        elif current_screen == "trips":
+            back_button = draw_placeholder_screen(
+                width,
+                height,
+                "Trips",
+            )
+
+        elif current_screen == "telemetry":
+            back_button = draw_placeholder_screen(
+                width,
+                height,
+                "Vehicle Telemetry",
+            )
+
+        elif current_screen == "settings":
+            back_button = draw_placeholder_screen(
+                width,
+                height,
+                "Settings",
+            )
+
+        elif current_screen == "apps":
+            back_button = draw_placeholder_screen(
+                width,
+                height,
+                "Apps",
+            )
+
+        elif current_screen == "media":
+            back_button = draw_placeholder_screen(
+                width,
+                height,
+                "Media",
+            )
+
+        elif current_screen == "carplay":
+            back_button = draw_placeholder_screen(
+                width,
+                height,
+                "Apple CarPlay",
+            )
+
+        else:
+            # Safety fallback in case current_screen contains
+            # an invalid name.
+            current_screen = "home"
+
+        # This must remain inside the while loop.
         pygame.display.flip()
+
+    # =========================
+    # CLEAN SHUTDOWN
+    # =========================
 
     try:
         if telemetry:
             telemetry.stop()
-    except Exception:
-        pass
+    except Exception as error:
+        print(f"[Telemetry shutdown error] {error}")
 
     pygame.quit()
     sys.exit()
