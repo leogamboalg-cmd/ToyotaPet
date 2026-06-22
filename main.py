@@ -7,7 +7,8 @@ import subprocess
 import pygame
 
 from car_telemetry import CarTelemetry
-
+from screens.trips_screen import draw_trips_screen
+from trip_manager import TripManager
 
 # =========================
 # BASIC SETUP
@@ -19,7 +20,7 @@ FPS = 60
 carplay_process = None
 
 CARPLAY_PATH = "/home/leog0495/Desktop/Carplay.AppImage"
-
+trip_manager = TripManager()
 pygame.init()
 screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
 pygame.display.set_caption("DashBuddy OS")
@@ -49,6 +50,13 @@ ASSET_PATHS = {
 # =========================
 
 current_screen = "home"
+trip_data = {
+    "elapsed_time": "00:00:00",
+    "distance_miles": 0.0,
+    "average_speed": 0.0,
+    "maximum_speed": 0.0,
+    "drive_score": 100,
+}
 
 click_targets = {
     "carplay": None,
@@ -1233,10 +1241,13 @@ def main():
             )
 
         elif current_screen == "trips":
-            back_button = draw_placeholder_screen(
-                width,
-                height,
-                "Trips",
+            back_button = draw_trips_screen(
+                surface=screen,
+                width=width,
+                height=height,
+                fonts=fonts,
+                trip_data=trip_data,
+                mouse_pos=mouse_pos,
             )
 
         elif current_screen == "telemetry":
