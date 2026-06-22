@@ -12,6 +12,7 @@ from screens.trips_screen import draw_trips_screen
 from trip_manager import TripManager
 from trip_history import get_recent_trips, save_trip
 from screens.telemetry_screen import draw_telemetry_screen
+from pet_manager import PetManager
 
 # =========================
 # BASIC SETUP
@@ -25,6 +26,10 @@ carplay_process = None
 CARPLAY_PATH = "/home/leog0495/Desktop/Carplay.AppImage"
 trip_manager = TripManager()
 pygame.init()
+try:
+    pygame.mixer.init()
+except pygame.error as error:
+    print(f"[Audio] Mixer failed to initialize: {error}")
 screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
 pygame.display.set_caption("DashBuddy OS")
 clock = pygame.time.Clock()
@@ -36,6 +41,30 @@ clock = pygame.time.Clock()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ICON_DIR = os.path.join(BASE_DIR, "assets", "icons")
+SOUND_DIR = os.path.join(BASE_DIR, "assets", "sounds")
+
+SOUND_PATHS = {
+    "hard_brake": os.path.join(SOUND_DIR, "hard_brake.mp3"),
+    "fast_acceleration": os.path.join(
+        SOUND_DIR,
+        "fast_acceleration.mp3",
+    ),
+    "high_speed": os.path.join(SOUND_DIR, "high_speed.mp3"),
+}
+pet_sounds = {}
+
+for name, path in SOUND_PATHS.items():
+    if not os.path.exists(path):
+        print(f"[Missing sound] {name}: {path}")
+        continue
+
+    try:
+        pet_sounds[name] = pygame.mixer.Sound(path)
+        print(f"[Sound loaded] {name}")
+    except pygame.error as error:
+        print(f"[Sound load failed] {name}: {error}")
+
+pet_manager = PetManager(pet_sounds)
 
 ASSET_PATHS = {
     "background": os.path.join(ICON_DIR, "homepageBackgroundOverLay.png"),
@@ -468,7 +497,7 @@ def draw_top_bar(width, top_h):
 # =========================
 
 
-def draw_buddy_panel(rect):
+def draw_buddy_panel(rect, pet_data):
     draw_panel(rect, radius=28, fill=(255, 255, 255),
                border=BORDER, shadow=True)
 
@@ -492,8 +521,14 @@ def draw_buddy_panel(rect):
     pygame.draw.polygon(screen, WHITE, tail)
     pygame.draw.lines(screen, BORDER, False, [tail[0], tail[1], tail[2]], 1)
 
-    draw_text("Ready to roll!", bubble.x + 16, bubble.y + 16,
-              fonts["body_bold"], TEXT, bubble.width - 32)
+    draw_text(
+        pet_data["message"],
+        bubble.x + 16,
+        bubble.y + 16,
+        fonts["body_bold"],
+        TEXT,
+        bubble.width - 32,
+    )
     draw_text("I'm here to make", bubble.x + 16, bubble.y +
               46, fonts["small"], TEXT, bubble.width - 32)
     draw_text("your drive awesome.", bubble.x + 16, bubble.y +
@@ -905,7 +940,7 @@ def draw_placeholder_screen(width, height, title):
     return back_rect
 
 
-def draw_home_screen(width, height, mouse_pos):
+def draw_home_screen(width, height, mouse_pos, pet_data):
 
     # Clear positions from the previous frame.
     # The responsive layout will replace the visible ones below.
@@ -943,7 +978,7 @@ def draw_home_screen(width, height, mouse_pos):
         right_x = center_x + center_w + gap
 
         buddy_rect = pygame.Rect(left_x, content_top, left_w, main_h)
-        draw_buddy_panel(buddy_rect)
+        draw_buddy_panel(buddy_rect, pet_data)
 
         # App grid
         card_w = (center_w - gap * 2) // 3
@@ -1008,7 +1043,7 @@ def draw_home_screen(width, height, mouse_pos):
         grid_x = left_x + left_w + gap
 
         buddy_rect = pygame.Rect(left_x, content_top, left_w, main_h)
-        draw_buddy_panel(buddy_rect)
+        draw_buddy_panel(buddy_rect, pet_data)
 
         card_w = (right_w - gap) // 2
         card_h = (main_h - gap * 2) // 3
@@ -1054,7 +1089,7 @@ def draw_home_screen(width, height, mouse_pos):
         card_h = 110
 
         buddy_rect = pygame.Rect(margin_x, content_top, content_w, buddy_h)
-        draw_buddy_panel(buddy_rect)
+        draw_buddy_panel(buddy_rect, pet_data)
 
         y = buddy_rect.bottom + gap
         card_w = (content_w - gap) // 2
@@ -1277,6 +1312,15 @@ def main():
 
         trip_data = trip_manager.get_data()
         trip_data["recent_trips"] = recent_trips
+        pet_manager.update(
+            speed=speed,
+            rpm=rpm,
+            hard_brakes=trip_data["hard_brakes"],
+            fast_accelerations=trip_data["fast_accelerations"],
+            trip_active=trip_data["trip_active"],
+        )
+
+        pet_data = pet_manager.get_data()
 
         if current_screen == "home":
             draw_background(width, height)
@@ -1290,6 +1334,7 @@ def main():
                 width,
                 height,
                 mouse_pos,
+                pet_data
             )
 
         elif current_screen == "trips":
@@ -1314,6 +1359,7 @@ def main():
                 coolant=coolant,
                 dtc=dtc,
                 connected=telemetry_connected,
+                speed_history=trip_data.get("speed_history", []),
             )
 
         elif current_screen == "settings":
