@@ -1,0 +1,46 @@
+[
+    {
+        "trip_active": false,
+        "trip_paused": false,
+        "elapsed_time": "00:00:01",
+        "distance_miles": 0.0,
+        "average_speed": 0.0,
+        "maximum_speed": 0.0,
+        "drive_score": 100,
+        "idle_time": "00:00:00",
+        "speed_history": [
+            0.0,
+            0.0
+        ],
+        "hard_brakes": 0,
+        "fast_accelerations": 0,
+        "long_idle_events": 0,
+        "smoothness": "Excellent",
+        "score": 100,
+        "date": "June 22, 2026 03:11 PM"
+    },
+    {
+        "trip_active": false,
+        "trip_paused": false,
+        "elapsed_time": "00:00:05",
+        "distance_miles": 0.0,
+        "average_speed": 0.0,
+        "maximum_speed": 0.0,
+        "drive_score": 100,
+        "idle_time": "00:00:00",
+        "speed_history": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+        ],
+        "hard_brakes": 0,
+        "fast_accelerations": 0,
+        "long_idle_events": 0,
+        "smoothness": "Excellent",
+        "score": 100,
+        "date": "June 22, 2026 03:11 PM"
+    }
+]

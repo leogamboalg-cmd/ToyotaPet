@@ -1,3 +1,4 @@
+# main.py
 import math
 import os
 import sys
@@ -9,6 +10,8 @@ import pygame
 from car_telemetry import CarTelemetry
 from screens.trips_screen import draw_trips_screen
 from trip_manager import TripManager
+from trip_history import get_recent_trips, save_trip
+from screens.telemetry_screen import draw_telemetry_screen
 
 # =========================
 # BASIC SETUP
@@ -50,13 +53,6 @@ ASSET_PATHS = {
 # =========================
 
 current_screen = "home"
-trip_data = {
-    "elapsed_time": "00:00:00",
-    "distance_miles": 0.0,
-    "average_speed": 0.0,
-    "maximum_speed": 0.0,
-    "drive_score": 100,
-}
 
 click_targets = {
     "carplay": None,
@@ -1170,8 +1166,8 @@ def main():
     global current_screen
 
     running = True
-    back_button = None
-
+    screen_buttons = {}
+    recent_trips = get_recent_trips(limit=3)
     # Preload images once at startup.
     for key in ASSET_PATHS:
         load_image(key)
@@ -1199,17 +1195,63 @@ def main():
 
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:
-                    # Handle clicks on the Home screen cards.
+
                     if current_screen == "home":
                         handle_mouse_click(event.pos)
 
-                    # Handle the back button on other screens.
-                    elif (
-                        back_button is not None
-                        and back_button.collidepoint(event.pos)
-                    ):
-                        current_screen = "home"
+                    elif current_screen == "trips":
+                        back_button = screen_buttons.get("back")
+                        start_button = screen_buttons.get("start")
+                        pause_button = screen_buttons.get("pause")
+                        end_button = screen_buttons.get("end")
 
+                        if (
+                            back_button is not None
+                            and back_button.collidepoint(event.pos)
+                        ):
+                            current_screen = "home"
+
+                        elif (
+                            start_button is not None
+                            and start_button.collidepoint(event.pos)
+                        ):
+                            trip_manager.start_trip()
+                            print("[Trip] Started")
+
+                        elif (
+                            pause_button is not None
+                            and pause_button.collidepoint(event.pos)
+                        ):
+                            trip_manager.toggle_pause()
+
+                            if trip_manager.trip_paused:
+                                print("[Trip] Paused")
+                            else:
+                                print("[Trip] Resumed")
+
+                        elif (
+                            end_button is not None
+                            and end_button.collidepoint(event.pos)
+                        ):
+                            finished_trip = trip_manager.end_trip()
+
+                            if finished_trip is not None:
+                                saved = save_trip(finished_trip)
+
+                                if saved:
+                                    recent_trips = get_recent_trips(limit=3)
+                                    print("[Trip] Ended and saved")
+                                else:
+                                    print("[Trip] Ended but could not be saved")
+
+                    else:
+                        back_button = screen_buttons.get("back")
+
+                        if (
+                            back_button is not None
+                            and back_button.collidepoint(event.pos)
+                        ):
+                            current_screen = "home"
             elif event.type == pygame.VIDEORESIZE:
                 new_width = max(MIN_WIDTH, event.w)
                 new_height = max(MIN_HEIGHT, event.h)
@@ -1224,7 +1266,17 @@ def main():
         # =========================
 
         width, height = screen.get_size()
-        back_button = None
+        screen_buttons = {}
+
+        speed, rpm, coolant, dtc = safe_data()
+
+        trip_manager.update(
+            speed_mph=speed,
+            rpm=rpm,
+        )
+
+        trip_data = trip_manager.get_data()
+        trip_data["recent_trips"] = recent_trips
 
         if current_screen == "home":
             draw_background(width, height)
@@ -1241,7 +1293,7 @@ def main():
             )
 
         elif current_screen == "trips":
-            back_button = draw_trips_screen(
+            screen_buttons = draw_trips_screen(
                 surface=screen,
                 width=width,
                 height=height,
@@ -1251,35 +1303,42 @@ def main():
             )
 
         elif current_screen == "telemetry":
-            back_button = draw_placeholder_screen(
-                width,
-                height,
-                "Vehicle Telemetry",
+            screen_buttons = draw_telemetry_screen(
+                surface=screen,
+                width=width,
+                height=height,
+                fonts=fonts,
+                mouse_pos=mouse_pos,
+                speed=speed,
+                rpm=rpm,
+                coolant=coolant,
+                dtc=dtc,
+                connected=telemetry_connected,
             )
 
         elif current_screen == "settings":
-            back_button = draw_placeholder_screen(
+            screen_buttons["back"] = draw_placeholder_screen(
                 width,
                 height,
                 "Settings",
             )
 
         elif current_screen == "apps":
-            back_button = draw_placeholder_screen(
+            screen_buttons["back"] = draw_placeholder_screen(
                 width,
                 height,
                 "Apps",
             )
 
         elif current_screen == "media":
-            back_button = draw_placeholder_screen(
+            screen_buttons["back"] = draw_placeholder_screen(
                 width,
                 height,
                 "Media",
             )
 
         elif current_screen == "carplay":
-            back_button = draw_placeholder_screen(
+            screen_buttons["back"] = draw_placeholder_screen(
                 width,
                 height,
                 "Apple CarPlay",

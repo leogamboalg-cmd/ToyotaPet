@@ -1,6 +1,7 @@
+# trips_screen.py
+
 import math
 import pygame
-
 
 # =========================
 # COLORS
@@ -234,15 +235,6 @@ def _draw_stat_card(surface, rect, title, value, subtitle, icon_kind, fonts,
 # SPEED GRAPH
 # =========================
 
-def _default_speed_history():
-    return [
-        22, 31, 27, 30, 36, 39, 33, 42, 45, 40, 43, 31, 49, 47, 58,
-        54, 58, 48, 46, 53, 55, 60, 61, 67, 65, 58, 61, 57, 56, 62,
-        64, 57, 54, 47, 23, 20, 31, 34, 22, 19, 23, 31, 28, 35, 43,
-        47, 51, 48, 52, 49, 54, 45, 49,
-    ]
-
-
 def _draw_speed_graph(surface, rect, fonts, speed_history):
     _draw_panel(surface, rect, radius=18)
 
@@ -270,7 +262,7 @@ def _draw_speed_graph(surface, rect, fonts, speed_history):
         label = _font(fonts, "tiny", "small").render(str(mph), True, MUTED)
         surface.blit(label, (plot.x - 34, y - label.get_height() // 2))
 
-    values = list(speed_history or _default_speed_history())
+    values = list(speed_history or [])
     if len(values) < 2:
         values = [0, 0]
 
@@ -326,7 +318,7 @@ def _draw_driving_events(surface, rect, fonts, trip_data):
         ("ϟ", "Fast Accelerations", "Rapid acceleration",
          str(_value(trip_data, "fast_accelerations", default=0)),
          ORANGE, ORANGE_SOFT),
-        ("◷", "Long Idle", "Idle over 5 minutes",
+        ("◷", "Long Idle", "Idle over 1 minute",
          str(_value(trip_data, "long_idle_events", default=0)),
          YELLOW, ORANGE_SOFT),
         ("●", "Smoothness", "Steady and consistent",
@@ -365,32 +357,147 @@ def _draw_driving_events(surface, rect, fonts, trip_data):
                                      row.centery - value_surface.get_height() // 2))
 
 
-def _draw_trip_controls(surface, rect, fonts, mouse_pos):
+def _draw_trip_controls(
+    surface,
+    rect,
+    fonts,
+    mouse_pos,
+    trip_active,
+    trip_paused,
+):
     _draw_panel(surface, rect, radius=18)
-    _draw_text(surface, "◉  Trip Controls", rect.x + 20, rect.y + 15,
-               _font(fonts, "body_bold", "body"), TEXT)
+
+    _draw_text(
+        surface,
+        "◉  Trip Controls",
+        rect.x + 20,
+        rect.y + 15,
+        _font(fonts, "body_bold", "body"),
+        TEXT,
+    )
 
     gap = 12
     button_y = rect.y + 55
     button_h = rect.height - 72
     button_w = (rect.width - 40 - gap * 2) // 3
 
-    specs = [
-        ("▶  Start Trip", BLUE, WHITE, BLUE),
-        ("Ⅱ  Pause", CARD_BLUE, BLUE, BORDER),
-        ("■  End Trip", RED_SOFT, RED, (245, 190, 194)),
-    ]
+    start_button = pygame.Rect(
+        rect.x + 20,
+        button_y,
+        button_w,
+        button_h,
+    )
 
-    for i, (label, fill, text_color, border) in enumerate(specs):
-        button = pygame.Rect(rect.x + 20 + i * (button_w + gap),
-                             button_y, button_w, button_h)
-        if button.collidepoint(mouse_pos):
-            fill = tuple(max(0, channel - 8) for channel in fill)
+    pause_button = pygame.Rect(
+        start_button.right + gap,
+        button_y,
+        button_w,
+        button_h,
+    )
 
-        pygame.draw.rect(surface, fill, button, border_radius=12)
-        pygame.draw.rect(surface, border, button, width=1, border_radius=12)
-        _draw_centered(surface, label, button,
-                       _font(fonts, "small", "tiny"), text_color)
+    end_button = pygame.Rect(
+        pause_button.right + gap,
+        button_y,
+        button_w,
+        button_h,
+    )
+
+    # Start button
+    start_enabled = not trip_active
+    start_fill = BLUE if start_enabled else (210, 220, 230)
+    start_text = WHITE if start_enabled else MUTED
+
+    if start_enabled and start_button.collidepoint(mouse_pos):
+        start_fill = (28, 110, 225)
+
+    pygame.draw.rect(
+        surface,
+        start_fill,
+        start_button,
+        border_radius=12,
+    )
+
+    _draw_centered(
+        surface,
+        "▶ Start Trip",
+        start_button,
+        _font(fonts, "small", "tiny"),
+        start_text,
+    )
+
+    # Pause/resume button
+    pause_enabled = trip_active
+
+    if trip_paused:
+        pause_label = "▶ Resume"
+    else:
+        pause_label = "Ⅱ Pause"
+
+    pause_fill = CARD_BLUE if pause_enabled else (235, 239, 243)
+    pause_text = BLUE if pause_enabled else MUTED
+
+    if pause_enabled and pause_button.collidepoint(mouse_pos):
+        pause_fill = BLUE_SOFT
+
+    pygame.draw.rect(
+        surface,
+        pause_fill,
+        pause_button,
+        border_radius=12,
+    )
+
+    pygame.draw.rect(
+        surface,
+        BORDER,
+        pause_button,
+        width=1,
+        border_radius=12,
+    )
+
+    _draw_centered(
+        surface,
+        pause_label,
+        pause_button,
+        _font(fonts, "small", "tiny"),
+        pause_text,
+    )
+
+    # End button
+    end_enabled = trip_active
+    end_fill = RED_SOFT if end_enabled else (240, 240, 240)
+    end_text = RED if end_enabled else MUTED
+
+    if end_enabled and end_button.collidepoint(mouse_pos):
+        end_fill = (250, 220, 223)
+
+    pygame.draw.rect(
+        surface,
+        end_fill,
+        end_button,
+        border_radius=12,
+    )
+
+    pygame.draw.rect(
+        surface,
+        (245, 190, 194),
+        end_button,
+        width=1,
+        border_radius=12,
+    )
+
+    _draw_centered(
+        surface,
+        "■ End Trip",
+        end_button,
+        _font(fonts, "small", "tiny"),
+        end_text,
+    )
+
+    return {
+        "start": start_button if start_enabled else None,
+        "pause": pause_button if pause_enabled else None,
+        "end": end_button if end_enabled else None,
+    }
 
 
 def _draw_buddy(surface, rect, fonts, trip_data):
@@ -437,11 +544,7 @@ def _draw_recent_trips(surface, rect, fonts, recent_trips):
     _draw_text(surface, "View History", rect.right - 95, rect.y + 16,
                _font(fonts, "small", "tiny"), BLUE)
 
-    trips = recent_trips or [
-        {"date": "May 10, 2025  9:15 AM", "distance": "18.36 mi", "score": "94/100"},
-        {"date": "May 9, 2025  6:45 PM", "distance": "24.12 mi", "score": "88/100"},
-        {"date": "May 9, 2025  8:10 AM", "distance": "11.07 mi", "score": "91/100"},
-    ]
+    trips = recent_trips or []
 
     table = pygame.Rect(rect.x + 16, rect.y + 45,
                         rect.width - 32, rect.height - 60)
@@ -487,6 +590,11 @@ def draw_trips_screen(surface, width, height, fonts, trip_data, mouse_pos):
 
     top_h = max(68, min(82, int(height * 0.11)))
     back_button = _draw_header(surface, width, top_h, fonts, mouse_pos)
+    trip_buttons = {
+        "start": None,
+        "pause": None,
+        "end": None,
+    }
 
     margin = max(20, int(width * 0.025))
     outer = pygame.Rect(
@@ -501,13 +609,49 @@ def draw_trips_screen(surface, width, height, fonts, trip_data, mouse_pos):
     _draw_text(surface, "Current Trip", outer.x + 24, title_y,
                _font(fonts, "card_title", "heading"), TEXT)
 
-    active_pill = pygame.Rect(outer.x + 172, title_y - 1, 102, 28)
-    pygame.draw.rect(surface, GREEN_SOFT, active_pill, border_radius=14)
-    pygame.draw.rect(surface, GREEN, active_pill, width=1, border_radius=14)
+    trip_active = bool(
+        _value(trip_data, "trip_active", default=False)
+    )
+    trip_paused = bool(
+        _value(trip_data, "trip_paused", default=False)
+    )
+
+    if trip_paused:
+        status_text = "Paused"
+        status_color = ORANGE
+        status_fill = ORANGE_SOFT
+    elif trip_active:
+        status_text = "Active Trip"
+        status_color = GREEN
+        status_fill = GREEN_SOFT
+    else:
+        status_text = "No Active Trip"
+        status_color = MUTED
+        status_fill = CARD_BLUE
+
+    active_pill = pygame.Rect(outer.x + 172, title_y - 1, 122, 28)
+    pygame.draw.rect(surface, status_fill, active_pill, border_radius=14)
+    pygame.draw.rect(
+        surface,
+        status_color,
+        active_pill,
+        width=1,
+        border_radius=14,
+    )
     pygame.draw.circle(
-        surface, GREEN, (active_pill.x + 15, active_pill.centery), 5)
-    _draw_text(surface, "Active Trip", active_pill.x + 28, active_pill.y + 6,
-               _font(fonts, "tiny", "small"), GREEN)
+        surface,
+        status_color,
+        (active_pill.x + 15, active_pill.centery),
+        5,
+    )
+    _draw_text(
+        surface,
+        status_text,
+        active_pill.x + 28,
+        active_pill.y + 6,
+        _font(fonts, "tiny", "small"),
+        status_color,
+    )
 
     # Values support both your old and current main.py key names.
     elapsed = _value(trip_data, "elapsed_time", "time", default="00:00:00")
@@ -521,7 +665,7 @@ def draw_trips_screen(surface, width, height, fonts, trip_data, mouse_pos):
     stat_specs = [
         ("Trip Time", str(elapsed), "hh:mm:ss", "clock", TEXT),
         ("Distance", f"{distance:.2f} mi", "Total", "pin", TEXT),
-        ("Average Speed", f"{average:.0f} MPH", "Overall", "gauge", TEXT),
+        ("Average Speed", f"{average:.0f} MPH", "Moving", "gauge", TEXT),
         ("Max Speed", f"{maximum:.0f} MPH", "Top Speed", "gauge", TEXT),
         ("Drive Score", f"{score:.0f}/100",
          "Excellent" if score >= 90 else "Keep improving", "star", GREEN),
@@ -599,9 +743,29 @@ def draw_trips_screen(surface, width, height, fonts, trip_data, mouse_pos):
             fonts,
             _value(trip_data, "speed_history", default=None),
         )
-        _draw_driving_events(surface, events_rect, fonts, trip_data)
-        _draw_trip_controls(surface, controls_rect, fonts, mouse_pos)
-        _draw_buddy(surface, buddy_rect, fonts, trip_data)
+
+        _draw_driving_events(
+            surface,
+            events_rect,
+            fonts,
+            trip_data,
+        )
+
+        trip_buttons = _draw_trip_controls(
+            surface=surface,
+            rect=controls_rect,
+            fonts=fonts,
+            mouse_pos=mouse_pos,
+            trip_active=trip_active,
+            trip_paused=trip_paused,
+        )
+
+        _draw_buddy(
+            surface,
+            buddy_rect,
+            fonts,
+            trip_data,
+        )
         _draw_recent_trips(
             surface,
             recent_rect,
@@ -620,4 +784,9 @@ def draw_trips_screen(surface, width, height, fonts, trip_data, mouse_pos):
             _value(trip_data, "speed_history", default=None),
         )
 
-    return back_button
+    return {
+        "back": back_button,
+        "start": trip_buttons["start"],
+        "pause": trip_buttons["pause"],
+        "end": trip_buttons["end"],
+    }

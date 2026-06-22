@@ -1,3 +1,4 @@
+# trip_manager.py
 import time
 
 
@@ -42,27 +43,35 @@ class TripManager:
         self.long_idle_events = 0
         self.drive_score = 100
 
+        # Event detection timing
+        self.long_idle_threshold_seconds = 60.0
+        self.long_idle_event_recorded = False
+
+        # Event cooldowns prevent one incident from being counted repeatedly
+        self.last_hard_brake_time = None
+        self.last_fast_acceleration_time = None
+        self.event_cooldown_seconds = 3.0
+
+        # Event thresholds in MPH per second
+        self.hard_brake_threshold = -7.0
+        self.fast_acceleration_threshold = 6.0
+        self.current_idle_seconds = 0.0
+
     def start_trip(self):
         """
-        Start a new trip.
-
-        Instructions:
-        1. Do nothing if a trip is already active.
-        2. Reset all old trip statistics.
-        3. Store the current monotonic time.
-        4. Set trip_active to True.
-        5. Set trip_paused to False.
-        6. Set last_update_time so update() can measure elapsed time.
+        Start a completely new trip.
         """
+
         if self.trip_active:
             return
 
         self.reset_trip()
 
-        current_time = time.monotonic()
+        self.start_time = time.monotonic()
 
-        self.start_time = current_time
-        self.last_update_time = current_time
+        # update() will initialize this when the first real
+        # telemetry reading arrives.
+        self.last_update_time = None
 
         self.trip_active = True
         self.trip_paused = False
@@ -86,6 +95,10 @@ class TripManager:
         self.trip_paused = True
         self.pause_started_at = time.monotonic()
 
+        # A pause breaks any continuous idle period.
+        self.current_idle_seconds = 0.0
+        self.long_idle_event_recorded = False
+
     def resume_trip(self):
         if not self.trip_active:
             return
@@ -101,6 +114,7 @@ class TripManager:
         self.pause_started_at = None
         self.trip_paused = False
         self.last_update_time = current_time
+        self.last_speed_sample_time = None
 
     def toggle_pause(self):
         """
@@ -164,27 +178,38 @@ class TripManager:
         self.fast_accelerations = 0
         self.long_idle_events = 0
         self.drive_score = 100
+        self.long_idle_event_recorded = False
+        self.last_hard_brake_time = None
+        self.last_fast_acceleration_time = None
+        self.current_idle_seconds = 0.0
+
+    def _cooldown_finished(self, previous_event_time, current_time):
+        """
+        Return True when enough time has passed since the previous event.
+
+        Without a cooldown, one braking action could be counted multiple
+        times because update() may run several times per second.
+        """
+
+        if previous_event_time is None:
+            return True
+
+        return (
+            current_time - previous_event_time
+            >= self.event_cooldown_seconds
+        )
 
     def update(self, speed_mph, rpm):
         """
-        Process one telemetry update.
+        Process one telemetry update from the car.
 
-        main.py should call this repeatedly while the program is running.
-
-        Instructions:
-        1. Return immediately if the trip is inactive or paused.
-        2. Read the current monotonic time.
-        3. Calculate delta_seconds since the previous update.
-        4. Reject invalid values such as negative time or very large gaps.
-        5. Convert speed_mph and rpm to safe non-negative floats.
-        6. Add distance using:
-               distance = speed_mph * (delta_seconds / 3600)
-        7. Update maximum_speed.
-        8. Add idle time when speed is below 1 MPH and RPM is above 400.
-        9. Add moving time when speed is at least 1 MPH.
-        10. Store one speed-history sample about once per second.
-        11. Later, detect hard braking and fast acceleration.
-        12. Save speed_mph into previous_speed.
+        This method:
+        - Calculates distance
+        - Tracks idle and moving time
+        - Records graph samples
+        - Detects hard braking
+        - Detects rapid acceleration
+        - Detects long idle periods
         """
 
         if not self.trip_active or self.trip_paused:
@@ -192,36 +217,125 @@ class TripManager:
 
         current_time = time.monotonic()
 
-        if self.last_update_time is None:
-            self.last_update_time = current_time
-            return
-
-        delta_seconds = current_time - self.last_update_time
-        self.last_update_time = current_time
-
-        if delta_seconds <= 0 or delta_seconds > 2:
-            return
-
         try:
-            speed_mph = max(0.0, float(speed_mph))
+            speed_mph = float(speed_mph)
+
+            if speed_mph < 0:
+                return
         except (TypeError, ValueError):
-            speed_mph = 0.0
+            # Do not treat missing speed data as zero.
+            return
 
         try:
             rpm = max(0.0, float(rpm))
         except (TypeError, ValueError):
             rpm = 0.0
 
-        delta_hours = delta_seconds / 3600
-        self.distance_miles += speed_mph * delta_hours
+        # Establish the first telemetry reading.
+        if self.last_update_time is None:
+            self.last_update_time = current_time
+            self.previous_speed = speed_mph
+            self.last_speed_sample_time = current_time
+            self.speed_history.append(speed_mph)
+            self.maximum_speed = speed_mph
+            return
 
-        self.maximum_speed = max(self.maximum_speed, speed_mph)
+        delta_seconds = current_time - self.last_update_time
+        self.last_update_time = current_time
 
-        if speed_mph < 1 and rpm > 400:
+        # Ignore invalid timing or long connection gaps.
+        if delta_seconds <= 0 or delta_seconds > 2:
+            self.previous_speed = speed_mph
+            self.last_speed_sample_time = current_time
+            return
+
+        # Use the average of the previous and current speeds.
+        average_interval_speed = (
+            self.previous_speed + speed_mph
+        ) / 2.0
+
+        delta_hours = delta_seconds / 3600.0
+        self.distance_miles += average_interval_speed * delta_hours
+
+        self.maximum_speed = max(
+            self.maximum_speed,
+            speed_mph
+        )
+
+        # -------------------------
+        # IDLE AND MOVING TIME
+        # -------------------------
+
+        engine_running = rpm > 400
+        vehicle_stopped = speed_mph < 1.0
+
+        if vehicle_stopped and engine_running:
             self.idle_seconds += delta_seconds
+            self.current_idle_seconds += delta_seconds
 
-        if speed_mph >= 1:
+            if (
+                self.current_idle_seconds
+                >= self.long_idle_threshold_seconds
+                and not self.long_idle_event_recorded
+            ):
+                self.long_idle_events += 1
+                self.long_idle_event_recorded = True
+
+        elif speed_mph >= 1.0:
             self.moving_seconds += delta_seconds
+            self.current_idle_seconds = 0.0
+            self.long_idle_event_recorded = False
+
+        else:
+            self.current_idle_seconds = 0.0
+            self.long_idle_event_recorded = False
+
+        # -------------------------
+        # DRIVING EVENT DETECTION
+        # -------------------------
+
+        speed_change = speed_mph - self.previous_speed
+        acceleration_mph_per_second = (
+            speed_change / delta_seconds
+        )
+
+        if (
+            self.previous_speed >= 5.0
+            and acceleration_mph_per_second
+            <= self.hard_brake_threshold
+            and self._cooldown_finished(
+                self.last_hard_brake_time,
+                current_time
+            )
+        ):
+            self.hard_brakes += 1
+            self.last_hard_brake_time = current_time
+
+        elif (
+            speed_mph >= 5.0
+            and acceleration_mph_per_second
+            >= self.fast_acceleration_threshold
+            and self._cooldown_finished(
+                self.last_fast_acceleration_time,
+                current_time
+            )
+        ):
+            self.fast_accelerations += 1
+            self.last_fast_acceleration_time = current_time
+
+        # -------------------------
+        # SPEED HISTORY
+        # -------------------------
+
+        if (
+            self.last_speed_sample_time is None
+            or current_time - self.last_speed_sample_time >= 1.0
+        ):
+            self.speed_history.append(speed_mph)
+            self.last_speed_sample_time = current_time
+
+            if len(self.speed_history) > 300:
+                self.speed_history.pop(0)
 
         self.previous_speed = speed_mph
 
@@ -269,13 +383,12 @@ class TripManager:
         - Protect against division by zero.
         """
 
-        elapsed_seconds = self.get_elapsed_seconds()
-        elapsed_hours = elapsed_seconds / 3600
+        moving_hours = self.moving_seconds / 3600.0
 
-        if elapsed_hours <= 0:
+        if moving_hours <= 0:
             return 0.0
 
-        return self.distance_miles / elapsed_hours
+        return self.distance_miles / moving_hours
 
     def format_duration(self, total_seconds):
         total_seconds = max(0, int(total_seconds))
@@ -328,4 +441,5 @@ class TripManager:
             "fast_accelerations": self.fast_accelerations,
             "long_idle_events": self.long_idle_events,
             "smoothness": smoothness,
+            "score": score,
         }
