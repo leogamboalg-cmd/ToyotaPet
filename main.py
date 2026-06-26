@@ -9,9 +9,10 @@ import pygame
 
 from car_telemetry import CarTelemetry
 from screens.trips_screen import draw_trips_screen
-from trip_manager import TripManager
+from trip_manager_solo import TripManager
 from trip_history import get_recent_trips, save_trip
 from screens.telemetry_screen import draw_telemetry_screen
+from mpg_calculator import ExtendedTelemetry
 from pet_manager import PetManager
 
 # =========================
@@ -67,7 +68,7 @@ for name, path in SOUND_PATHS.items():
 pet_manager = PetManager(pet_sounds)
 
 ASSET_PATHS = {
-    "background": os.path.join(ICON_DIR, "homepageBackgroundOverLay.png"),
+    "background": os.path.join(ICON_DIR, "homepageBackgroundOverlay.png"),
     "bmo": os.path.join(ICON_DIR, "bmo.png"),
     "carplay": os.path.join(ICON_DIR, "carplay.png"),
     "trips": os.path.join(ICON_DIR, "trips.png"),
@@ -155,6 +156,7 @@ fonts = {
 # =========================
 
 telemetry = None
+extended_telemetry = None
 telemetry_connected = False
 telemetry_connecting = True
 telemetry_error = ""
@@ -168,17 +170,20 @@ def connect_obd_in_background():
     the UI still opens and shows offline data instead of crashing.
     """
     global telemetry
+    global extended_telemetry
     global telemetry_connected
     global telemetry_connecting
     global telemetry_error
 
     try:
         telemetry = CarTelemetry()
+        extended_telemetry = ExtendedTelemetry(telemetry)
         telemetry.start()
         telemetry_connected = True
         telemetry_error = ""
     except Exception as e:
         telemetry = None
+        extended_telemetry = None
         telemetry_connected = False
         telemetry_error = str(e)
         print(f"[OBD Connection Failed] {e}")
@@ -421,6 +426,20 @@ def safe_data():
             return 0, 0, 0, "Offline"
 
     return 0, 0, 0, "Offline"
+
+
+def safe_mpg():
+    """
+    Calculates instant fuel economy if the OBD adapter is connected.
+    """
+    if telemetry_connected and extended_telemetry:
+        try:
+            data = extended_telemetry.get_data()
+            return max(0.0, float(data.get("instant_mpg", 0.0)))
+        except Exception:
+            return 0.0
+
+    return 0.0
 
 
 # =========================
@@ -1304,6 +1323,7 @@ def main():
         screen_buttons = {}
 
         speed, rpm, coolant, dtc = safe_data()
+        instant_mpg = safe_mpg()
 
         trip_manager.update(
             speed_mph=speed,
@@ -1360,6 +1380,7 @@ def main():
                 dtc=dtc,
                 connected=telemetry_connected,
                 speed_history=trip_data.get("speed_history", []),
+                instant_mpg=instant_mpg,
             )
 
         elif current_screen == "settings":

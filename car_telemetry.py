@@ -15,6 +15,8 @@ class CarTelemetry:
         self._speed = 0
         self._rpm = 0
         self._coolant = 0
+        self._maf = 0.0
+        self.maf = 0.0
         self._dtc = "Clear"
 
         self._last_dtc_check = 0
@@ -44,6 +46,7 @@ class CarTelemetry:
                 new_rpm = self.connection.query(obd.commands.RPM)
                 new_speed = self.connection.query(obd.commands.SPEED)
                 new_coolant = self.connection.query(obd.commands.COOLANT_TEMP)
+                new_maf = self.connection.query(obd.commands.MAF)
 
                 now = time.time()
                 should_check_dtc = now - self._last_dtc_check >= 10
@@ -64,6 +67,10 @@ class CarTelemetry:
                         self._coolant = int(
                             (new_coolant.value.magnitude * 9 / 5) + 32
                         )
+
+                    if not new_maf.is_null():
+                        self._maf = float(new_maf.value.magnitude)
+                        self.maf = self._maf
 
                     if new_dtc is not None:
                         if not new_dtc.is_null() and new_dtc.value:

@@ -561,6 +561,22 @@ def _coolant_state(coolant):
     return "Normal", GREEN
 
 
+def _mpg_state(mpg, connected):
+    if not connected:
+        return "Waiting for OBD data", YELLOW
+
+    if mpg <= 0:
+        return "No fuel flow reading", FAINT
+
+    if mpg >= 35:
+        return "Efficient cruising", GREEN
+
+    if mpg >= 24:
+        return "Normal economy", BLUE
+
+    return "Heavy fuel use", YELLOW
+
+
 def _draw_diagnostics_card(
     surface,
     rect,
@@ -796,6 +812,7 @@ def draw_telemetry_screen(
     dtc,
     connected,
     speed_history=None,
+    instant_mpg=0.0,
 ):
     """
     Draw the complete vehicle telemetry dashboard.
@@ -808,6 +825,7 @@ def draw_telemetry_screen(
     speed = max(0.0, _safe_float(speed))
     rpm = max(0.0, _safe_float(rpm))
     coolant = max(0.0, _safe_float(coolant))
+    instant_mpg = max(0.0, _safe_float(instant_mpg))
 
     if speed_history is None:
         speed_history = []
@@ -973,13 +991,64 @@ def draw_telemetry_screen(
         border=BORDER_SOFT,
     )
 
+    mpg_label, mpg_color = _mpg_state(
+        instant_mpg,
+        connected,
+    )
+
+    pygame.draw.circle(
+        surface,
+        mpg_color,
+        (live_rect.x + 28, live_rect.y + 28),
+        8,
+    )
+
     _draw_text(
         surface,
-        "Live Readings",
-        live_rect.x + 22,
+        "Fuel Economy",
+        live_rect.x + 44,
         live_rect.y + 18,
         _font(fonts, "body_bold"),
         TEXT,
+    )
+
+    mpg_value = (
+        f"{instant_mpg:.1f}"
+        if connected and instant_mpg > 0
+        else "--"
+    )
+
+    mpg_surface = _font(fonts, "speed_tiny", "heading").render(
+        mpg_value,
+        True,
+        TEXT,
+    )
+
+    mpg_rect = mpg_surface.get_rect(
+        topleft=(
+            live_rect.x + 22,
+            live_rect.y + 52,
+        )
+    )
+
+    surface.blit(mpg_surface, mpg_rect)
+
+    _draw_text(
+        surface,
+        "MPG",
+        mpg_rect.right + 8,
+        mpg_rect.y + 18,
+        _font(fonts, "body_bold"),
+        MUTED,
+    )
+
+    _draw_text(
+        surface,
+        mpg_label,
+        live_rect.x + 22,
+        mpg_rect.bottom + 2,
+        _font(fonts, "tiny"),
+        mpg_color,
     )
 
     readings = [
@@ -997,37 +1066,40 @@ def draw_telemetry_screen(
 
     row_y = live_rect.y + 55
     row_height = 24
+    row_x = live_rect.x + int(live_rect.width * 0.56)
+    show_readings = live_rect.width >= 430
 
-    for label, value in readings:
-        _draw_text(
-            surface,
-            label,
-            live_rect.x + 22,
-            row_y,
-            _font(fonts, "small"),
-            MUTED,
-        )
-
-        value_surface = _font(
-            fonts,
-            "small",
-        ).render(
-            value,
-            True,
-            TEXT,
-        )
-
-        surface.blit(
-            value_surface,
-            (
-                live_rect.right -
-                value_surface.get_width() -
-                22,
+    if show_readings:
+        for label, value in readings:
+            _draw_text(
+                surface,
+                label,
+                row_x,
                 row_y,
-            ),
-        )
+                _font(fonts, "small"),
+                MUTED,
+            )
 
-        row_y += row_height
+            value_surface = _font(
+                fonts,
+                "small",
+            ).render(
+                value,
+                True,
+                TEXT,
+            )
+
+            surface.blit(
+                value_surface,
+                (
+                    live_rect.right -
+                    value_surface.get_width() -
+                    22,
+                    row_y,
+                ),
+            )
+
+            row_y += row_height
 
     diagnostics_rect = pygame.Rect(
         right_x,

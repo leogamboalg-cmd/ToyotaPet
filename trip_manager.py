@@ -1,5 +1,23 @@
 # trip_manager.py
 import time
+import requests
+import time
+from collections import deque
+
+import requests
+
+EXPRESS_URL = "http://localhost:5000/api/data/submitData"
+
+
+def send_trip_to_server(trip_data):
+    try:
+        requests.post(
+            "http://127.0.0.1:5000/api/data/submitData",
+            json=trip_data,
+            timeout=2
+        )
+    except requests.RequestException as e:
+        print("Failed to send trip:", e)
 
 
 class TripManager:
@@ -47,14 +65,21 @@ class TripManager:
         self.long_idle_threshold_seconds = 60.0
         self.long_idle_event_recorded = False
 
-        # Event cooldowns prevent one incident from being counted repeatedly
-        self.last_hard_brake_time = None
-        self.last_fast_acceleration_time = None
-        self.event_cooldown_seconds = 3.0
+        # Store recent speed readings for event detection.
+        self.event_speed_samples = deque()
+        self.event_window_seconds = 1.0
 
-        # Event thresholds in MPH per second
-        self.hard_brake_threshold = -7.0
-        self.fast_acceleration_threshold = 6.0
+        # Prevent one continuous maneuver from counting repeatedly.
+        self.hard_brake_active = False
+        self.fast_acceleration_active = False
+
+        # Acceleration thresholds in MPH per second.
+        self.hard_brake_threshold = -8.0
+        self.fast_acceleration_threshold = 7.0
+
+        # The acceleration must return near normal before another event can count.
+        self.event_release_threshold = 3.0
+
         self.current_idle_seconds = 0.0
 
     def start_trip(self):
@@ -150,6 +175,7 @@ class TripManager:
 
         self.trip_active = False
         self.trip_paused = False
+        send_trip_to_server(trip_data)
 
         return trip_data
 
@@ -179,8 +205,10 @@ class TripManager:
         self.long_idle_events = 0
         self.drive_score = 100
         self.long_idle_event_recorded = False
-        self.last_hard_brake_time = None
-        self.last_fast_acceleration_time = None
+        self.event_speed_samples.clear()
+
+        self.hard_brake_active = False
+        self.fast_acceleration_active = False
         self.current_idle_seconds = 0.0
 
     def _cooldown_finished(self, previous_event_time, current_time):
@@ -294,34 +322,58 @@ class TripManager:
         # DRIVING EVENT DETECTION
         # -------------------------
 
-        speed_change = speed_mph - self.previous_speed
-        acceleration_mph_per_second = (
-            speed_change / delta_seconds
-        )
+        # Add the newest speed reading.
+        self.event_speed_samples.append((current_time, speed_mph))
 
-        if (
-            self.previous_speed >= 5.0
-            and acceleration_mph_per_second
-            <= self.hard_brake_threshold
-            and self._cooldown_finished(
-                self.last_hard_brake_time,
-                current_time
-            )
+        # Remove readings older than approximately one second.
+        while (
+            len(self.event_speed_samples) > 1
+            and current_time - self.event_speed_samples[0][0]
+            > self.event_window_seconds
         ):
-            self.hard_brakes += 1
-            self.last_hard_brake_time = current_time
+            self.event_speed_samples.popleft()
 
-        elif (
-            speed_mph >= 5.0
-            and acceleration_mph_per_second
-            >= self.fast_acceleration_threshold
-            and self._cooldown_finished(
-                self.last_fast_acceleration_time,
-                current_time
-            )
-        ):
-            self.fast_accelerations += 1
-            self.last_fast_acceleration_time = current_time
+        if len(self.event_speed_samples) >= 2:
+            oldest_time, oldest_speed = self.event_speed_samples[0]
+
+            event_delta_seconds = current_time - oldest_time
+
+            if event_delta_seconds >= 0.75:
+                acceleration_mph_per_second = (
+                    speed_mph - oldest_speed
+                ) / event_delta_seconds
+
+                # Count one hard-braking maneuver.
+                if (
+                    oldest_speed >= 10.0
+                    and acceleration_mph_per_second
+                    <= self.hard_brake_threshold
+                ):
+                    if not self.hard_brake_active:
+                        self.hard_brakes += 1
+                        self.hard_brake_active = True
+
+                    self.fast_acceleration_active = False
+
+                # Count one fast-acceleration maneuver.
+                elif (
+                    speed_mph >= 10.0
+                    and acceleration_mph_per_second
+                    >= self.fast_acceleration_threshold
+                ):
+                    if not self.fast_acceleration_active:
+                        self.fast_accelerations += 1
+                        self.fast_acceleration_active = True
+
+                    self.hard_brake_active = False
+
+                # Reset only after acceleration becomes normal again.
+                elif (
+                    abs(acceleration_mph_per_second)
+                    <= self.event_release_threshold
+                ):
+                    self.hard_brake_active = False
+                    self.fast_acceleration_active = False
 
         # -------------------------
         # SPEED HISTORY
@@ -400,14 +452,35 @@ class TripManager:
         return f"{hours:02}:{minutes:02}:{seconds:02}"
 
     def calculate_drive_score(self):
-        score = 100
+        # Use at least three miles so very short trips are not over-penalized.
+        scoring_distance = max(self.distance_miles, 3.0)
 
-        score -= self.hard_brakes * 4
-        score -= self.fast_accelerations * 2
-        score -= self.long_idle_events * 1
+        # Convert event totals into events per ten miles.
+        distance_units = scoring_distance / 10.0
 
-        # Prevent the score from going below 0 or above 100.
-        self.drive_score = max(0, min(100, score))
+        hard_brakes_per_10_miles = (
+            self.hard_brakes / distance_units
+        )
+
+        fast_accels_per_10_miles = (
+            self.fast_accelerations / distance_units
+        )
+
+        hard_brake_penalty = hard_brakes_per_10_miles * 2.5
+        acceleration_penalty = fast_accels_per_10_miles * 1.25
+
+        # Idle penalty is intentionally small and capped.
+        idle_penalty = min(self.long_idle_events * 1.0, 5.0)
+
+        total_penalty = (
+            hard_brake_penalty
+            + acceleration_penalty
+            + idle_penalty
+        )
+
+        self.drive_score = round(
+            max(0.0, min(100.0, 100.0 - total_penalty))
+        )
 
         return self.drive_score
 

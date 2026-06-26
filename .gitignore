@@ -1,2 +1,32 @@
-/.venv
-/random
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# Node
+node_modules/
+backend/node_modules/
+npm-debug.log*
+
+# Local environment
+.env
+.env.*
+
+# Generated/local output
+trip_graphs/
+outputs/
+obd_supported_commands.csv
+backend/data/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Scratch space
+random/
+
