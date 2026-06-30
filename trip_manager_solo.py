@@ -94,7 +94,7 @@ class TripManager:
         self.drive_score = 100
 
         # Event detection timing
-        self.long_idle_threshold_seconds = 60.0
+        self.long_idle_threshold_seconds = 120.0
         self.long_idle_event_recorded = False
 
         # Store recent speed readings for event detection.

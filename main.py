@@ -6,6 +6,7 @@ import threading
 from datetime import datetime
 import subprocess
 import pygame
+import time
 
 from car_telemetry import CarTelemetry
 from screens.trips_screen import draw_trips_screen
@@ -51,6 +52,7 @@ SOUND_PATHS = {
         "fast_acceleration.mp3",
     ),
     "high_speed": os.path.join(SOUND_DIR, "high_speed.mp3"),
+    "long_idle_event": os.path.join(SOUND_DIR, "long_idle_event.wav"),
 }
 pet_sounds = {}
 
@@ -163,32 +165,39 @@ telemetry_error = ""
 
 
 def connect_obd_in_background():
-    """
-    Tries to connect to the OBD adapter in a background thread.
-
-    This keeps the Pygame window responsive. If the adapter fails,
-    the UI still opens and shows offline data instead of crashing.
-    """
     global telemetry
     global extended_telemetry
     global telemetry_connected
     global telemetry_connecting
     global telemetry_error
 
-    try:
-        telemetry = CarTelemetry()
-        extended_telemetry = ExtendedTelemetry(telemetry)
-        telemetry.start()
-        telemetry_connected = True
-        telemetry_error = ""
-    except Exception as e:
-        telemetry = None
-        extended_telemetry = None
-        telemetry_connected = False
-        telemetry_error = str(e)
-        print(f"[OBD Connection Failed] {e}")
-    finally:
-        telemetry_connecting = False
+    while not telemetry_connected:
+        telemetry_connecting = True
+
+        try:
+            print("[OBD] Attempting connection...")
+
+            telemetry = CarTelemetry()
+            extended_telemetry = ExtendedTelemetry(telemetry)
+            telemetry.start()
+
+            telemetry_connected = True
+            telemetry_error = ""
+            telemetry_connecting = False
+
+            print("[OBD] Connected!")
+
+        except Exception as e:
+            telemetry = None
+            extended_telemetry = None
+            telemetry_connected = False
+            telemetry_error = str(e)
+
+            print(f"[OBD] Connection failed: {e}")
+            print("[OBD] Retrying in 5 seconds...")
+
+            telemetry_connecting = False
+            time.sleep(5)
 
 
 obd_thread = threading.Thread(target=connect_obd_in_background, daemon=True)
@@ -1270,6 +1279,7 @@ def main():
                             and start_button.collidepoint(event.pos)
                         ):
                             trip_manager.start_trip()
+                            pet_manager.reset_trip_events()
                             print("[Trip] Started")
 
                         elif (
@@ -1337,6 +1347,7 @@ def main():
             rpm=rpm,
             hard_brakes=trip_data["hard_brakes"],
             fast_accelerations=trip_data["fast_accelerations"],
+            long_idle_events=trip_data["long_idle_events"],
             trip_active=trip_data["trip_active"],
         )
 

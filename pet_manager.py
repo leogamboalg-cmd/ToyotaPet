@@ -17,6 +17,7 @@ class PetManager:
         self.last_high_speed_sound = 0.0
         self.high_speed_sound_cooldown = 10.0
         self.previous_fast_accelerations = 0
+        self.previous_long_idle_events = 0
         self.was_high_speed = False
 
     def _play_sound(self, name):
@@ -31,6 +32,7 @@ class PetManager:
         rpm,
         hard_brakes=0,
         fast_accelerations=0,
+        long_idle_events=0,
         trip_active=False,
     ):
         """
@@ -55,10 +57,12 @@ class PetManager:
         new_fast_acceleration = (
             fast_accelerations > self.previous_fast_accelerations
         )
+        new_long_idle_event = long_idle_events > self.previous_long_idle_events
 
         # Save the latest counts so the same event is not reused.
         self.previous_hard_brakes = hard_brakes
         self.previous_fast_accelerations = fast_accelerations
+        self.previous_long_idle_events = long_idle_events
 
         # Hard braking has priority over rapid acceleration.
         if new_hard_brake:
@@ -68,6 +72,7 @@ class PetManager:
                 current_time + self.reaction_duration
             )
             self._play_sound("hard_brake")
+            print("Playing sound: hard_brake")
             return
 
         if new_fast_acceleration:
@@ -77,6 +82,15 @@ class PetManager:
                 current_time + self.reaction_duration
             )
             self._play_sound("fast_acceleration")
+            return
+
+        if new_long_idle_event:
+            self.mood = "bored"
+            self.message = "Are we parked?"
+            self.reaction_ends_at = (
+                current_time + self.reaction_duration
+            )
+            self._play_sound("long_idle_event")
             return
 
         # Keep displaying the temporary event reaction.
@@ -121,6 +135,7 @@ class PetManager:
         """
         self.previous_hard_brakes = 0
         self.previous_fast_accelerations = 0
+        self.previous_long_idle_events = 0
         self.reaction_ends_at = 0.0
         self.last_high_speed_sound = 0.0
 
