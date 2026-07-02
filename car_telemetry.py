@@ -1,3 +1,4 @@
+import os
 import threading
 import time
 import obd
@@ -6,7 +7,9 @@ import obd
 class CarTelemetry:
     def __init__(self):
         """Initializes the connection and setup variables."""
-        self.connection = obd.OBD("COM7", fast=False, timeout=10)
+        configured_port = os.environ.get("DASHBUDDY_OBD_PORT")
+        port = configured_port or ("COM7" if os.name == "nt" else None)
+        self.connection = obd.OBD(port, fast=True, timeout=1)
 
         self._lock = threading.Lock()
         self._running = False
@@ -20,6 +23,9 @@ class CarTelemetry:
         self._dtc = "Clear"
 
         self._last_dtc_check = 0
+        self._last_coolant_check = 0
+        self._last_maf_check = 0
+        self._last_error_log = 0
 
         if self.connection.is_connected():
             print("🚗 [Telemetry] Successfully connected to 2018 Toyota Corolla!")
@@ -43,15 +49,28 @@ class CarTelemetry:
         """Internal continuous loop that fetches car data over and over."""
         while self._running:
             try:
+                now = time.time()
                 new_rpm = self.connection.query(obd.commands.RPM)
                 new_speed = self.connection.query(obd.commands.SPEED)
-                new_coolant = self.connection.query(obd.commands.COOLANT_TEMP)
-                new_maf = self.connection.query(obd.commands.MAF)
 
-                now = time.time()
-                should_check_dtc = now - self._last_dtc_check >= 10
+                should_check_coolant = now - self._last_coolant_check >= 1
+                should_check_maf = now - self._last_maf_check >= 1
+                should_check_dtc = now - self._last_dtc_check >= 30
 
+                new_coolant = None
+                new_maf = None
                 new_dtc = None
+
+                if should_check_coolant:
+                    new_coolant = self.connection.query(
+                        obd.commands.COOLANT_TEMP
+                    )
+                    self._last_coolant_check = now
+
+                if should_check_maf:
+                    new_maf = self.connection.query(obd.commands.MAF)
+                    self._last_maf_check = now
+
                 if should_check_dtc:
                     new_dtc = self.connection.query(obd.commands.GET_DTC)
                     self._last_dtc_check = now
@@ -63,12 +82,12 @@ class CarTelemetry:
                     if not new_rpm.is_null():
                         self._rpm = int(new_rpm.value.magnitude)
 
-                    if not new_coolant.is_null():
+                    if new_coolant is not None and not new_coolant.is_null():
                         self._coolant = int(
                             (new_coolant.value.magnitude * 9 / 5) + 32
                         )
 
-                    if not new_maf.is_null():
+                    if new_maf is not None and not new_maf.is_null():
                         self._maf = float(new_maf.value.magnitude)
                         self.maf = self._maf
 
@@ -79,7 +98,11 @@ class CarTelemetry:
                             self._dtc = "Clear"
 
             except Exception as e:
-                print(f"[Telemetry Error] {e}")
+                now = time.time()
+
+                if now - self._last_error_log >= 5:
+                    print(f"[Telemetry Error] {e}")
+                    self._last_error_log = now
 
             time.sleep(0.5)
 

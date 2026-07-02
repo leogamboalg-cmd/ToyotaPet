@@ -84,7 +84,7 @@ class TripManager:
         self.previous_speed = 0.0
 
         # Graph data
-        self.speed_history = []
+        self.speed_history = deque(maxlen=300)
         self.last_speed_sample_time = None
 
         # Driving events
@@ -141,7 +141,7 @@ class TripManager:
         self.idle_seconds = 0.0
 
         self.previous_speed = 0.0
-        self.speed_history = []
+        self.speed_history.clear()
         self.last_speed_sample_time = None
         self.hard_brakes = 0
         self.fast_accelerations = 0
@@ -494,7 +494,8 @@ class TripManager:
         4. Choose a smoothness label from score ranges.
         5. Return a dictionary containing state, times, distance, speeds,
            score, event totals, history, and smoothness.
-        6. Use speed_history.copy() so callers do not receive your original list.
+        6. Convert speed_history to a list so callers do not receive
+           your original deque.
         """
         score = self.calculate_drive_score()
 
@@ -520,7 +521,7 @@ class TripManager:
             "idle_time": self.format_duration(
                 self.idle_seconds
             ),
-            "speed_history": self.speed_history.copy(),
+            "speed_history": list(self.speed_history),
             "hard_brakes": self.hard_brakes,
             "fast_accelerations": self.fast_accelerations,
             "long_idle_events": self.long_idle_events,

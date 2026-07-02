@@ -26,10 +26,13 @@ BORDER = (147, 195, 231)
 BORDER_SOFT = (202, 224, 241)
 SHADOW = (90, 136, 172)
 
+_background_cache = {}
+_text_cache = {}
 
 # =========================
 # HELPERS
 # =========================
+
 
 def _font(fonts, preferred, fallback="body"):
     """
@@ -49,7 +52,14 @@ def _draw_text(
     font,
     color=TEXT,
 ):
-    rendered = font.render(str(text), True, color)
+    key = (str(text), id(font), color)
+
+    rendered = _text_cache.get(key)
+
+    if rendered is None:
+        rendered = font.render(str(text), True, color)
+        _text_cache[key] = rendered
+
     surface.blit(rendered, (x, y))
     return rendered.get_rect(topleft=(x, y))
 
@@ -61,31 +71,40 @@ def _draw_centered(
     font,
     color=TEXT,
 ):
-    rendered = font.render(str(text), True, color)
+    key = (str(text), id(font), color)
+
+    rendered = _text_cache.get(key)
+
+    if rendered is None:
+        rendered = font.render(str(text), True, color)
+        _text_cache[key] = rendered
+
     rendered_rect = rendered.get_rect(center=rect.center)
     surface.blit(rendered, rendered_rect)
     return rendered_rect
 
 
-def _draw_round_rect_alpha(
-    surface,
-    rect,
-    color,
-    radius,
-):
-    temporary = pygame.Surface(
-        (rect.width, rect.height),
-        pygame.SRCALPHA,
-    )
+_round_rect_cache = {}
 
-    pygame.draw.rect(
-        temporary,
-        color,
-        temporary.get_rect(),
-        border_radius=radius,
-    )
 
-    surface.blit(temporary, rect)
+def _draw_round_rect_alpha(surface, rect, color, radius):
+    key = (rect.width, rect.height, color, radius)
+
+    cached = _round_rect_cache.get(key)
+
+    if cached is None:
+        cached = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+
+        pygame.draw.rect(
+            cached,
+            color,
+            cached.get_rect(),
+            border_radius=radius,
+        )
+
+        _round_rect_cache[key] = cached
+
+    surface.blit(cached, rect)
 
 
 def _draw_panel(
@@ -141,34 +160,34 @@ def _clamp(value, minimum, maximum):
 # =========================
 
 def _draw_background(surface, width, height):
-    """
-    Draw a soft dashboard-style background.
+    key = (width, height)
 
-    This screen does not depend on the homepage image, so it can work
-    independently from main.py's asset loader.
-    """
-    surface.fill((231, 246, 255))
+    cached = _background_cache.get(key)
 
-    overlay = pygame.Surface(
-        (width, height),
-        pygame.SRCALPHA,
-    )
+    if cached is None:
+        cached = pygame.Surface((width, height))
+        cached.fill((231, 246, 255))
 
-    pygame.draw.circle(
-        overlay,
-        (255, 255, 255, 105),
-        (int(width * 0.18), int(height * 0.28)),
-        int(height * 0.38),
-    )
+        overlay = pygame.Surface((width, height), pygame.SRCALPHA)
 
-    pygame.draw.circle(
-        overlay,
-        (180, 224, 255, 80),
-        (int(width * 0.82), int(height * 0.72)),
-        int(height * 0.42),
-    )
+        pygame.draw.circle(
+            overlay,
+            (255, 255, 255, 105),
+            (int(width * 0.18), int(height * 0.28)),
+            int(height * 0.38),
+        )
 
-    surface.blit(overlay, (0, 0))
+        pygame.draw.circle(
+            overlay,
+            (180, 224, 255, 80),
+            (int(width * 0.82), int(height * 0.72)),
+            int(height * 0.42),
+        )
+
+        cached.blit(overlay, (0, 0))
+        _background_cache[key] = cached
+
+    surface.blit(cached, (0, 0))
 
 
 def _draw_header(

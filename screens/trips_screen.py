@@ -30,10 +30,14 @@ BORDER_SOFT = (207, 226, 241)
 GRID = (219, 232, 243)
 SHADOW = (83, 125, 160)
 
+_shadow_cache = {}
+_text_cache = {}
+_graph_fill_cache = {}
 
 # =========================
 # GENERAL HELPERS
 # =========================
+
 
 def _font(fonts, preferred, fallback):
     """Returns a requested font, or a safe fallback from the shared font map."""
@@ -41,13 +45,27 @@ def _font(fonts, preferred, fallback):
 
 
 def _draw_text(surface, text, x, y, font, color=TEXT):
-    rendered = font.render(str(text), True, color)
+    key = (str(text), id(font), color)
+
+    rendered = _text_cache.get(key)
+
+    if rendered is None:
+        rendered = font.render(str(text), True, color)
+        _text_cache[key] = rendered
+
     surface.blit(rendered, (x, y))
     return rendered.get_rect(topleft=(x, y))
 
 
 def _draw_centered(surface, text, rect, font, color=TEXT):
-    rendered = font.render(str(text), True, color)
+    key = (str(text), id(font), color)
+
+    rendered = _text_cache.get(key)
+
+    if rendered is None:
+        rendered = font.render(str(text), True, color)
+        _text_cache[key] = rendered
+
     text_rect = rendered.get_rect(center=rect.center)
     surface.blit(rendered, text_rect)
     return text_rect
@@ -55,14 +73,22 @@ def _draw_centered(surface, text, rect, font, color=TEXT):
 
 def _draw_panel(surface, rect, radius=20, fill=WHITE, border=BORDER_SOFT,
                 shadow=True, shadow_offset=5):
+
     if shadow:
-        shadow_surface = pygame.Surface(rect.size, pygame.SRCALPHA)
-        pygame.draw.rect(
-            shadow_surface,
-            (*SHADOW, 24),
-            shadow_surface.get_rect(),
-            border_radius=radius,
-        )
+        key = (rect.width, rect.height, radius)
+
+        shadow_surface = _shadow_cache.get(key)
+
+        if shadow_surface is None:
+            shadow_surface = pygame.Surface(rect.size, pygame.SRCALPHA)
+            pygame.draw.rect(
+                shadow_surface,
+                (*SHADOW, 24),
+                shadow_surface.get_rect(),
+                border_radius=radius,
+            )
+            _shadow_cache[key] = shadow_surface
+
         surface.blit(shadow_surface, rect.move(0, shadow_offset))
 
     pygame.draw.rect(surface, fill, rect, border_radius=radius)
@@ -259,8 +285,8 @@ def _draw_speed_graph(surface, rect, fonts, speed_history):
     for mph in range(0, max_mph + 1, 20):
         y = plot.bottom - int((mph / max_mph) * plot.height)
         pygame.draw.line(surface, GRID, (plot.x, y), (plot.right, y), 1)
-        label = _font(fonts, "tiny", "small").render(str(mph), True, MUTED)
-        surface.blit(label, (plot.x - 34, y - label.get_height() // 2))
+        _draw_text(surface, str(mph), plot.x - 34, y - _font(fonts, "tiny",
+                   "small").get_height() // 2, _font(fonts, "tiny", "small"), MUTED)
 
     values = list(speed_history or [])
     if len(values) < 2:
@@ -276,16 +302,41 @@ def _draw_speed_graph(surface, rect, fonts, speed_history):
     if len(points) >= 2:
         fill_points = [(points[0][0], plot.bottom), *points,
                        (points[-1][0], plot.bottom)]
-        fill_surface = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
-        pygame.draw.polygon(fill_surface, (*BLUE, 24), fill_points)
-        surface.blit(fill_surface, (0, 0))
+        cache_key = (
+            plot.width,
+            plot.height,
+            tuple(round(float(value), 2) for value in values),
+        )
+        fill_surface = _graph_fill_cache.get(cache_key)
+
+        if fill_surface is None:
+            if len(_graph_fill_cache) > 32:
+                _graph_fill_cache.clear()
+
+            fill_surface = pygame.Surface(
+                (plot.width, plot.height), pygame.SRCALPHA)
+
+            local_fill_points = [
+                (x - plot.x, y - plot.y)
+                for x, y in fill_points
+            ]
+
+            pygame.draw.polygon(fill_surface, (*BLUE, 24), local_fill_points)
+            _graph_fill_cache[cache_key] = fill_surface
+
+        surface.blit(fill_surface, plot.topleft)
         pygame.draw.lines(surface, BLUE, False, points, 3)
 
     labels = ["0 min", "5 min", "10 min", "15 min", "20 min", "24 min"]
     for index, label_text in enumerate(labels):
         x = plot.x + int(index / (len(labels) - 1) * plot.width)
-        label = _font(fonts, "tiny", "small").render(label_text, True, MUTED)
-        surface.blit(label, (x - label.get_width() // 2, plot.bottom + 8))
+        _draw_centered(
+            surface,
+            label_text,
+            pygame.Rect(x - 40, plot.bottom + 8, 80, 18),
+            _font(fonts, "tiny", "small"),
+            MUTED,
+        )
 
 
 # =========================
@@ -351,10 +402,17 @@ def _draw_driving_events(surface, rect, fonts, trip_data):
         _draw_text(surface, subtitle, row.x + 50, row.y + 25,
                    _font(fonts, "tiny", "small"), MUTED)
 
-        value_surface = _font(fonts, "body_bold", "body").render(
-            value, True, color)
-        surface.blit(value_surface, (row.right - value_surface.get_width() - 24,
-                                     row.centery - value_surface.get_height() // 2))
+        value_font = _font(fonts, "body_bold", "body")
+
+        value_rect = value_font.render(value, True, color).get_rect()
+        _draw_text(
+            surface,
+            value,
+            row.right - value_rect.width - 24,
+            row.centery - value_rect.height // 2,
+            value_font,
+            color,
+        )
 
 
 def _draw_trip_controls(

@@ -22,7 +22,7 @@ from pet_manager import PetManager
 
 WIDTH, HEIGHT = 1280, 720
 MIN_WIDTH, MIN_HEIGHT = 800, 480
-FPS = 60
+FPS = int(os.environ.get("DASHBUDDY_FPS", "15"))
 carplay_process = None
 
 CARPLAY_PATH = "/home/leog0495/Desktop/Carplay.AppImage"
@@ -46,7 +46,7 @@ ICON_DIR = os.path.join(BASE_DIR, "assets", "icons")
 SOUND_DIR = os.path.join(BASE_DIR, "assets", "sounds")
 
 SOUND_PATHS = {
-    "hard_brake": os.path.join(SOUND_DIR, "hard_brake.mp3"),
+    "hard_brake": os.path.join(SOUND_DIR, "hard_brake.wav"),
     "fast_acceleration": os.path.join(
         SOUND_DIR,
         "fast_acceleration.mp3",
@@ -209,6 +209,10 @@ obd_thread.start()
 # =========================
 
 image_cache = {}
+scaled_image_cache = {}
+round_rect_cache = {}
+background_cache = {}
+soft_circle_cache = {}
 
 
 def load_image(name):
@@ -239,9 +243,7 @@ def load_image(name):
 def blit_image_fit(surface, image, rect, contain=True, alpha=255):
     """
     Draws an image inside a rectangle.
-
-    contain=True keeps the whole image visible.
-    contain=False fills the rectangle and crops extra edges.
+    Caches resized images so pygame does not smoothscale every frame.
     """
     if image is None:
         return
@@ -260,11 +262,18 @@ def blit_image_fit(surface, image, rect, contain=True, alpha=255):
     new_w = max(1, int(iw * scale))
     new_h = max(1, int(ih * scale))
 
-    scaled = pygame.transform.smoothscale(image, (new_w, new_h))
+    cache_key = (image, new_w, new_h, alpha)
 
-    if alpha < 255:
-        scaled = scaled.copy()
-        scaled.set_alpha(alpha)
+    if cache_key in scaled_image_cache:
+        scaled = scaled_image_cache[cache_key]
+    else:
+        scaled = pygame.transform.smoothscale(image, (new_w, new_h))
+
+        if alpha < 255:
+            scaled = scaled.copy()
+            scaled.set_alpha(alpha)
+
+        scaled_image_cache[cache_key] = scaled
 
     x = rect.centerx - new_w // 2
     y = rect.centery - new_h // 2
@@ -280,10 +289,10 @@ def blit_image_fit(surface, image, rect, contain=True, alpha=255):
         )
         surface.blit(scaled, rect.topleft, crop)
 
-
 # =========================
 # UI HELPERS
 # =========================
+
 
 def fit_text(text, font, max_width):
     text = str(text)
@@ -305,26 +314,53 @@ def fit_text(text, font, max_width):
     return shortened.rstrip() + ellipsis
 
 
+text_cache = {}
+
+
 def draw_text(text, x, y, font, color=TEXT, max_width=None):
     if max_width is not None:
         text = fit_text(text, font, max_width)
 
-    text_surface = font.render(str(text), True, color)
+    key = (str(text), id(font), color)
+
+    text_surface = text_cache.get(key)
+    if text_surface is None:
+        text_surface = font.render(str(text), True, color)
+        text_cache[key] = text_surface
+
     screen.blit(text_surface, (x, y))
     return text_surface.get_rect(topleft=(x, y))
 
 
 def draw_centered_text(text, rect, font, color=TEXT):
-    text_surface = font.render(str(text), True, color)
+    key = (str(text), id(font), color)
+
+    text_surface = text_cache.get(key)
+    if text_surface is None:
+        text_surface = font.render(str(text), True, color)
+        text_cache[key] = text_surface
+
     text_rect = text_surface.get_rect(center=rect.center)
     screen.blit(text_surface, text_rect)
     return text_rect
 
 
 def draw_round_rect_alpha(surface, rect, color, radius):
-    temp = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
-    pygame.draw.rect(temp, color, temp.get_rect(), border_radius=radius)
-    surface.blit(temp, rect)
+    key = (rect.width, rect.height, color, radius)
+
+    cached = round_rect_cache.get(key)
+
+    if cached is None:
+        cached = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+        pygame.draw.rect(
+            cached,
+            color,
+            cached.get_rect(),
+            border_radius=radius,
+        )
+        round_rect_cache[key] = cached
+
+    surface.blit(cached, rect)
 
 
 def draw_panel(rect, radius=24, fill=CARD, border=BORDER, shadow=True, shadow_offset=7):
@@ -345,28 +381,39 @@ def draw_panel(rect, radius=24, fill=CARD, border=BORDER, shadow=True, shadow_of
 
 
 def draw_soft_circle(center, radius, color=(229, 246, 255), alpha=220):
-    circle = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
-    pygame.draw.circle(circle, (*color, alpha), (radius, radius), radius)
+    key = (radius, color, alpha)
+    circle = soft_circle_cache.get(key)
+
+    if circle is None:
+        circle = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
+        pygame.draw.circle(circle, (*color, alpha), (radius, radius), radius)
+        soft_circle_cache[key] = circle
+
     screen.blit(circle, (center[0] - radius, center[1] - radius))
 
 
 def draw_background(width, height):
-    """
-    Uses the generated cartoon road image as the background.
-    It fills the screen and crops slightly if the window ratio changes.
-    """
-    bg = load_image("background")
+    key = (width, height)
 
-    if bg:
-        blit_image_fit(screen, bg, pygame.Rect(
-            0, 0, width, height), contain=False)
-    else:
-        screen.fill((232, 247, 255))
+    cached = background_cache.get(key)
 
-    # Soft white wash so cards stay readable.
-    overlay = pygame.Surface((width, height), pygame.SRCALPHA)
-    overlay.fill((255, 255, 255, 70))
-    screen.blit(overlay, (0, 0))
+    if cached is None:
+        cached = pygame.Surface((width, height))
+
+        bg = load_image("background")
+        if bg:
+            blit_image_fit(cached, bg, pygame.Rect(
+                0, 0, width, height), contain=False)
+        else:
+            cached.fill((232, 247, 255))
+
+        overlay = pygame.Surface((width, height), pygame.SRCALPHA)
+        overlay.fill((255, 255, 255, 70))
+        cached.blit(overlay, (0, 0))
+
+        background_cache[key] = cached
+
+    screen.blit(cached, (0, 0))
 
 
 def get_time_text():
@@ -968,13 +1015,12 @@ def draw_placeholder_screen(width, height, title):
     return back_rect
 
 
-def draw_home_screen(width, height, mouse_pos, pet_data):
+def draw_home_screen(width, height, mouse_pos, pet_data, speed):
 
     # Clear positions from the previous frame.
     # The responsive layout will replace the visible ones below.
     for screen_name in click_targets:
         click_targets[screen_name] = None
-    speed, rpm, coolant, dtc = safe_data()
 
     top_h = max(70, min(86, int(height * 0.12)))
     bottom_h = max(64, min(82, int(height * 0.115)))
@@ -1231,6 +1277,10 @@ def main():
     running = True
     screen_buttons = {}
     recent_trips = get_recent_trips(limit=3)
+    trip_data = trip_manager.get_data()
+    trip_data["recent_trips"] = recent_trips
+    last_trip_snapshot_at = 0.0
+
     # Preload images once at startup.
     for key in ASSET_PATHS:
         load_image(key)
@@ -1333,15 +1383,18 @@ def main():
         screen_buttons = {}
 
         speed, rpm, coolant, dtc = safe_data()
-        instant_mpg = safe_mpg()
 
         trip_manager.update(
             speed_mph=speed,
             rpm=rpm,
         )
 
-        trip_data = trip_manager.get_data()
-        trip_data["recent_trips"] = recent_trips
+        now = time.monotonic()
+        if now - last_trip_snapshot_at >= 0.25:
+            trip_data = trip_manager.get_data()
+            trip_data["recent_trips"] = recent_trips
+            last_trip_snapshot_at = now
+
         pet_manager.update(
             speed=speed,
             rpm=rpm,
@@ -1365,7 +1418,8 @@ def main():
                 width,
                 height,
                 mouse_pos,
-                pet_data
+                pet_data,
+                speed,
             )
 
         elif current_screen == "trips":
@@ -1391,7 +1445,7 @@ def main():
                 dtc=dtc,
                 connected=telemetry_connected,
                 speed_history=trip_data.get("speed_history", []),
-                instant_mpg=instant_mpg,
+                instant_mpg=safe_mpg(),
             )
 
         elif current_screen == "settings":
